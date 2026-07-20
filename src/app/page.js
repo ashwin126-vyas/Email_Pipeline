@@ -393,7 +393,7 @@ export default function Home() {
     <div className="min-h-screen">
       {/* Sticky header */}
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-5 py-3">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-3 px-5 py-3">
           <div className="mr-auto">
             <h1 className="flex items-center gap-2 text-lg font-bold text-slate-900">
               <span className="grid h-7 w-7 place-items-center rounded-md bg-blue-600 text-sm text-white">
@@ -416,84 +416,28 @@ export default function Home() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-5 py-6">
+      <main className="mx-auto max-w-7xl px-5 py-6">
         <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-100 px-5 py-4">
             <h2 className="text-sm font-semibold text-slate-900">Recipients</h2>
           </div>
 
-          <div className="space-y-4 p-5">
-            {/* Search (left) + Select all (top-right, above the range) */}
-            <div className="flex flex-wrap items-end gap-3">
-              <div className="min-w-[220px] flex-1">
-                <label className={labelCls}>Search</label>
-                <input
-                  type="text"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Filter by name, company, title, email…"
-                  className={inputCls}
-                />
-              </div>
-              <button className={btnGhost} onClick={selectAllFiltered}>
-                Select all ({filtered.length})
+          <div className="grid grid-cols-1 gap-4 p-5 xl:grid-cols-[minmax(0,1fr)_17rem]">
+            {/* Left column: demo toggle + the recipients table */}
+            <div className="min-w-0 space-y-4">
+            {/* Demo user toggle — left side */}
+            <div className="flex">
+              <button
+                className={
+                  showDemo
+                    ? "inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-100 px-2.5 py-1.5 text-xs font-semibold text-amber-800 transition hover:bg-amber-200"
+                    : btnGhostSm
+                }
+                onClick={() => setShowDemo((v) => !v)}
+                title="Show/hide a demo test-recipient row"
+              >
+                🧪 Demo user
               </button>
-            </div>
-
-            {/* Range slider — select the first N contacts, from 0 to the total */}
-            <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2.5">
-              <label className={`${labelCls} mb-0 whitespace-nowrap`}>Range</label>
-              <span className="text-xs font-medium text-slate-400">0</span>
-              <input
-                type="range"
-                min={0}
-                max={filtered.length}
-                value={Math.min(rangeCount, filtered.length)}
-                onChange={(e) => applyRange(Number(e.target.value))}
-                disabled={filtered.length === 0}
-                aria-label="Select the first N contacts"
-                className="range-slider flex-1"
-                style={{
-                  background: `linear-gradient(to right, #2563eb 0%, #2563eb ${rangePct}%, #e2e8f0 ${rangePct}%, #e2e8f0 100%)`,
-                }}
-              />
-              <span className="text-xs font-medium text-slate-400">{filtered.length}</span>
-              <span className="w-36 shrink-0 text-right text-sm font-semibold text-slate-700">
-                {rangeCount > 0 ? `First ${rangeCount} selected` : "Drag to select"}
-              </span>
-            </div>
-
-            {/* Clear + count (left) · Demo user (center) · Send (right) */}
-            <div className="grid grid-cols-3 items-center gap-2">
-              <div className="flex items-center gap-2">
-                <button className={btnGhostSm} onClick={clearSelection}>
-                  Clear
-                </button>
-                <span className="text-sm font-semibold text-slate-700">{selected.size} selected</span>
-              </div>
-              <div className="flex justify-center">
-                <button
-                  className={
-                    showDemo
-                      ? "inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-100 px-2.5 py-1.5 text-xs font-semibold text-amber-800 transition hover:bg-amber-200"
-                      : btnGhostSm
-                  }
-                  onClick={() => setShowDemo((v) => !v)}
-                  title="Show/hide a demo test-recipient row"
-                >
-                  🧪 Demo user
-                </button>
-              </div>
-              <div className="flex justify-end">
-                <button
-                  className={btnPrimary}
-                  onClick={handleSendBulk}
-                  disabled={bulkSending || selected.size === 0 || !bodyReady}
-                  title={!bodyReady ? "Set the email first (top-right)" : undefined}
-                >
-                  {bulkSending ? "Sending…" : `Send to ${selected.size} selected`}
-                </button>
-              </div>
             </div>
 
             {loading && <p className="text-sm text-slate-500">Loading contacts…</p>}
@@ -681,6 +625,67 @@ export default function Home() {
                 />
               </div>
             )}
+            </div>
+
+            {/* Right rail — Range selector + selection actions, in the free space beside the table */}
+            <aside className="xl:col-start-2 xl:row-start-1">
+              <div className="sticky top-24 space-y-4 rounded-lg border border-slate-200 bg-slate-50/60 p-4">
+                {/* Range */}
+                <div>
+                  <div className="flex items-center justify-between">
+                    <label className={`${labelCls} mb-0`}>Range</label>
+                    <span className="text-sm font-semibold text-slate-700">
+                      {rangeCount > 0 ? `First ${rangeCount}` : "0"}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={filtered.length}
+                    value={Math.min(rangeCount, filtered.length)}
+                    onChange={(e) => applyRange(Number(e.target.value))}
+                    disabled={filtered.length === 0}
+                    aria-label="Select the first N contacts"
+                    className="range-slider mt-3 w-full"
+                    style={{
+                      background: `linear-gradient(to right, #2563eb 0%, #2563eb ${rangePct}%, #e2e8f0 ${rangePct}%, #e2e8f0 100%)`,
+                    }}
+                  />
+                  <div className="mt-1 flex justify-between text-xs font-medium text-slate-400">
+                    <span>0</span>
+                    <span>{filtered.length}</span>
+                  </div>
+                  <p className="mt-3 text-xs leading-relaxed text-slate-500">
+                    {rangeCount > 0
+                      ? `Selecting the first ${rangeCount} of ${filtered.length} contacts.`
+                      : "Drag to select the first N contacts."}
+                  </p>
+                </div>
+
+                {/* Selection actions — moved here, below the range bar */}
+                <div className="space-y-2 border-t border-slate-200 pt-4">
+                  <button className={`${btnGhost} w-full`} onClick={selectAllFiltered}>
+                    Select all ({filtered.length})
+                  </button>
+                  <div className="flex items-center justify-between">
+                    <button className={btnGhostSm} onClick={clearSelection}>
+                      Clear
+                    </button>
+                    <span className="text-sm font-semibold text-slate-700">
+                      {selected.size} selected
+                    </span>
+                  </div>
+                  <button
+                    className={`${btnPrimary} w-full`}
+                    onClick={handleSendBulk}
+                    disabled={bulkSending || selected.size === 0 || !bodyReady}
+                    title={!bodyReady ? "Set the email first (top-right)" : undefined}
+                  >
+                    {bulkSending ? "Sending…" : `Send to ${selected.size} selected`}
+                  </button>
+                </div>
+              </div>
+            </aside>
           </div>
         </section>
       </main>

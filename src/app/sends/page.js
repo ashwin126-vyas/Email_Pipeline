@@ -13,6 +13,7 @@ export default function SendsPage() {
   const [error, setError] = useState("");
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState("all"); // all | sent | failed
+  const [deletingId, setDeletingId] = useState(null);
 
   async function load() {
     setLoading(true);
@@ -36,6 +37,23 @@ export default function SendsPage() {
   useEffect(() => {
     setPage(1);
   }, [statusFilter]);
+
+  async function handleDelete(s) {
+    if (!confirm("Delete this entry from the send log? This only removes the history row — it does not unsend the email.")) {
+      return;
+    }
+    setDeletingId(s.id);
+    try {
+      const res = await fetch(`/api/sends/${s.id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to delete entry");
+      setSends((prev) => prev.filter((row) => row.id !== s.id));
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   const sentCount = sends.filter((s) => s.status === "sent").length;
   const failedCount = sends.length - sentCount;
@@ -134,6 +152,7 @@ export default function SendsPage() {
                         <th className={thCls}>Subject</th>
                         <th className={thCls}>Template</th>
                         <th className={`${thCls} w-24`}>Status</th>
+                        <th className={`${thCls} w-16`}></th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -173,6 +192,17 @@ export default function SendsPage() {
                                 Failed
                               </span>
                             )}
+                          </td>
+                          <td className="px-3 py-2.5 align-middle">
+                            <button
+                              onClick={() => handleDelete(s)}
+                              disabled={deletingId === s.id}
+                              title="Delete from history"
+                              aria-label="Delete from history"
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-red-50 hover:text-red-600 focus:outline-none focus:ring-2 focus:ring-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {deletingId === s.id ? "…" : "🗑"}
+                            </button>
                           </td>
                         </tr>
                       ))}
