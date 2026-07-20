@@ -1,0 +1,25 @@
+{
+  "name": "apollo-email-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3001",
+    "build": "next build",
+    "start": "next start -p 3001",
+    "lint": "eslint",
+    "db:setup": "node --env-file=.env scripts/setup-db.mjs"
+  },
+  "dependencies": {
+    "next": "16.2.3",
+    "pg": "^8.20.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.5.0",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.3",
+    "postcss": "^8.5.9",
+    "tailwindcss": "^3.4.13"
+  }
+}
