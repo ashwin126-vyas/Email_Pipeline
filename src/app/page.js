@@ -425,8 +425,8 @@ export default function Home() {
           <div className="grid grid-cols-1 gap-4 p-5 xl:grid-cols-[minmax(0,1fr)_17rem]">
             {/* Left column: demo toggle + the recipients table */}
             <div className="min-w-0 space-y-4">
-            {/* Demo user toggle — left side */}
-            <div className="flex">
+            {/* Top bar — Demo toggle (left) · bulk Send (right, above the Action column) */}
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <button
                 className={
                   showDemo
@@ -437,6 +437,14 @@ export default function Home() {
                 title="Show/hide a demo test-recipient row"
               >
                 🧪 Demo user
+              </button>
+              <button
+                className={btnPrimary}
+                onClick={handleSendBulk}
+                disabled={bulkSending || selected.size === 0 || !bodyReady}
+                title={!bodyReady ? "Set the email first (top-right)" : undefined}
+              >
+                {bulkSending ? "Sending…" : `Send to ${selected.size} selected`}
               </button>
             </div>
 
@@ -662,7 +670,7 @@ export default function Home() {
                   </p>
                 </div>
 
-                {/* Selection actions — moved here, below the range bar */}
+                {/* Selection actions — below the range bar */}
                 <div className="space-y-2 border-t border-slate-200 pt-4">
                   <button className={`${btnGhost} w-full`} onClick={selectAllFiltered}>
                     Select all ({filtered.length})
@@ -675,14 +683,6 @@ export default function Home() {
                       {selected.size} selected
                     </span>
                   </div>
-                  <button
-                    className={`${btnPrimary} w-full`}
-                    onClick={handleSendBulk}
-                    disabled={bulkSending || selected.size === 0 || !bodyReady}
-                    title={!bodyReady ? "Set the email first (top-right)" : undefined}
-                  >
-                    {bulkSending ? "Sending…" : `Send to ${selected.size} selected`}
-                  </button>
                 </div>
               </div>
             </aside>
