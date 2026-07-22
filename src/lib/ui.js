@@ -22,6 +22,20 @@ export const codeCls =
 export const tabLink =
   "inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700";
 
+// Active nav tab (current page).
+export const tabLinkActive =
+  "inline-flex items-center gap-2 rounded-lg border border-blue-600 bg-blue-600 px-3.5 py-2 text-sm font-semibold text-white shadow-sm";
+
+// A stat/KPI tile (overview strips).
+export const statTile =
+  "rounded-xl border border-slate-200 bg-white p-4 shadow-sm";
+
+// Section card + its header row (reused across pages).
+export const sectionCard =
+  "rounded-xl border border-slate-200 bg-white shadow-sm";
+export const sectionHead =
+  "flex flex-wrap items-center gap-3 border-b border-slate-100 px-5 py-4";
+
 // Status pills.
 export const pillSent =
   "inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700";

@@ -7,7 +7,7 @@ import { sendEmail, renderTemplate } from "@/lib/brevo";
 // The DEMO / test path. UNLIKE /api/send (which never trusts a client-supplied
 // address and looks contacts up fresh in the DB), this route sends to the exact
 // address typed in the UI — on purpose, so you can email yourself a test before
-// touching real contacts. It logs the attempt into email_sends with
+// touching real contacts. It logs the attempt into email_logs with
 // apollo_id = 'demo' so it shows up (marked) in Sent history like any other send.
 export async function POST(req) {
   let body;
@@ -19,6 +19,8 @@ export async function POST(req) {
 
   const name = (body.name || "").trim();
   const email = (body.email || "").trim();
+  const company = (body.company || "").trim();
+  const title = (body.title || "").trim();
   const { subject, html, text } = body;
   const templateId = Number.isInteger(body.templateId) ? body.templateId : null;
 
@@ -36,27 +38,29 @@ export async function POST(req) {
   }
 
   // A synthetic contact so the same {{token}} personalization applies.
-  const contact = { apollo_id: "demo", name, email, company: "", title: "" };
+  const contact = { apollo_id: "demo", name, email, company, title };
   const renderedSubject = renderTemplate(subject, contact);
+  const renderedText = text ? renderTemplate(text, contact) : null;
 
   const r = await sendEmail({
     to: email,
     toName: name || undefined,
     subject: renderedSubject,
     html: html ? renderTemplate(html, contact) : undefined,
-    text: text ? renderTemplate(text, contact) : undefined,
+    text: renderedText || undefined,
   });
 
   // Log the test send (never let a logging failure sink the response).
   try {
     await pool.query(
-      `INSERT INTO email_sends
-         (apollo_id, email, name, company, subject, status, message_id, error, template_id)
-       VALUES ('demo', $1, $2, 'Demo (test)', $3, $4, $5, $6, $7)`,
+      `INSERT INTO email_logs
+         (email, name, company, subject, body, status, message_id, error, template_id)
+       VALUES ($1, $2, 'Demo (test)', $3, $4, $5, $6, $7, $8)`,
       [
         email,
         name || null,
         renderedSubject,
+        renderedText || null,
         r.ok ? "sent" : "failed",
         r.ok ? r.messageId || null : null,
         r.ok ? null : r.error || "Unknown error",

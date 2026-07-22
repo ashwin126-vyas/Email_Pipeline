@@ -72,16 +72,17 @@ export async function POST(req) {
     const settled = await Promise.all(
       chunk.map(async (c) => {
         const renderedSubject = renderTemplate(subject, c);
+        const renderedText = text ? renderTemplate(text, c) : null;
         const r = await sendEmail({
           to: c.email,
           toName: c.name || undefined,
           subject: renderedSubject,
           html: html ? renderTemplate(html, c) : undefined,
-          text: text ? renderTemplate(text, c) : undefined,
+          text: renderedText || undefined,
         });
-        // Record every attempt (sent OR failed) in the email_sends log. This
+        // Record every attempt (sent OR failed) in the email_logs log. This
         // write must never sink the send itself, so swallow logging errors.
-        await logSend(c, renderedSubject, r, templateId).catch(() => {});
+        await logSend(c, renderedSubject, renderedText, r, templateId).catch(() => {});
         return {
           id: c.apollo_id,
           email: c.email,
@@ -101,18 +102,18 @@ export async function POST(req) {
   return Response.json({ sent, failed, total: results.length, results });
 }
 
-// Insert one row into email_sends for a single attempt.
-async function logSend(contact, renderedSubject, result, templateId) {
+// Insert one row into email_logs for a single attempt.
+async function logSend(contact, renderedSubject, renderedBody, result, templateId) {
   await pool.query(
-    `INSERT INTO email_sends
-       (apollo_id, email, name, company, subject, status, message_id, error, template_id)
+    `INSERT INTO email_logs
+       (email, name, company, subject, body, status, message_id, error, template_id)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
     [
-      contact.apollo_id,
       contact.email,
       contact.name || null,
       contact.company || null,
       renderedSubject,
+      renderedBody || null,
       result.ok ? "sent" : "failed",
       result.ok ? result.messageId || null : null,
       result.ok ? null : result.error || "Unknown error",

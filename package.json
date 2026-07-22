@@ -7,10 +7,17 @@
     "build": "next build",
     "start": "next start -p 3001",
     "lint": "eslint",
-    "db:setup": "node --env-file=.env scripts/setup-db.mjs"
+    "db:setup": "node --env-file=.env scripts/setup-db.mjs",
+    "worker": "node --env-file=.env worker/index.mjs",
+    "classify:test": "node --env-file=.env scripts/test-classify.mjs",
+    "test:automation": "node --env-file=.env scripts/test-automation.mjs",
+    "test:followup": "node --env-file=.env scripts/test-followup.mjs"
   },
   "dependencies": {
+    "imapflow": "^1.4.7",
+    "mailparser": "^3.9.14",
     "next": "16.2.3",
+    "node-cron": "^4.6.0",
     "pg": "^8.20.0",
     "react": "19.2.4",
     "react-dom": "19.2.4"

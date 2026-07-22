@@ -24,9 +24,10 @@ function getSender() {
  * @param {string} args.subject
  * @param {string} args.html      HTML body
  * @param {string} [args.text]    optional plain-text body
+ * @param {object} [args.headers] optional custom SMTP headers (e.g. List-Unsubscribe)
  * @returns {Promise<{ok: boolean, messageId?: string, error?: string, status?: number}>}
  */
-export async function sendEmail({ to, toName, subject, html, text }) {
+export async function sendEmail({ to, toName, subject, html, text, headers }) {
   const apiKey = process.env.BREVO_API_KEY;
   if (!apiKey) {
     return { ok: false, error: "BREVO_API_KEY is not set." };
@@ -48,6 +49,9 @@ export async function sendEmail({ to, toName, subject, html, text }) {
     subject,
     ...(html ? { htmlContent: html } : {}),
     ...(text ? { textContent: text } : {}),
+    // Custom headers (List-Unsubscribe / List-Unsubscribe-Post for bulk-sender
+    // compliance). Brevo forwards a `headers` object verbatim onto the message.
+    ...(headers && Object.keys(headers).length ? { headers } : {}),
   };
 
   if (process.env.BREVO_REPLY_TO) {

@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import Pagination from "@/components/Pagination";
-import { tabLink, btnGhostSm, pillSent, pillFailed, thCls } from "@/lib/ui";
+import AppHeader from "@/components/AppHeader";
+import { tabLink, btnGhostSm, pillSent, pillFailed, thCls, statTile } from "@/lib/ui";
 
 const PAGE_SIZE = 10;
 
@@ -14,6 +15,7 @@ export default function SendsPage() {
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState("all"); // all | sent | failed
   const [deletingId, setDeletingId] = useState(null);
+  const [viewing, setViewing] = useState(null); // the send row whose full email is open
 
   async function load() {
     setLoading(true);
@@ -83,26 +85,29 @@ export default function SendsPage() {
 
   return (
     <div className="min-h-screen">
-      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-5 py-3">
-          <div className="mr-auto">
-            <h1 className="flex items-center gap-2 text-lg font-bold text-slate-900">
-              <span className="grid h-7 w-7 place-items-center rounded-md bg-blue-600 text-sm text-white">
-                📤
-              </span>
-              Emailed Send
-            </h1>
-            <p className="mt-0.5 text-xs text-slate-500">
-              Every email sent through Brevo — successes and failures — newest first.
-            </p>
-          </div>
-          <Link href="/" className={tabLink}>
-            <span>←</span> Recipients
-          </Link>
-        </div>
-      </header>
+      <AppHeader
+        active="sends"
+        subtitle="Every email sent through Brevo — successes and failures, newest first."
+      />
 
-      <main className="mx-auto max-w-6xl px-5 py-6">
+      <main className="mx-auto max-w-6xl space-y-6 px-5 py-6">
+        <section className="grid gap-3 sm:grid-cols-3">
+          <div className={statTile}>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+              Total logged
+            </div>
+            <div className="mt-1 text-2xl font-bold text-slate-900">{sends.length}</div>
+          </div>
+          <div className={statTile}>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Sent</div>
+            <div className="mt-1 text-2xl font-bold text-emerald-600">{sentCount}</div>
+          </div>
+          <div className={statTile}>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Failed</div>
+            <div className="mt-1 text-2xl font-bold text-red-600">{failedCount}</div>
+          </div>
+        </section>
+
         <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="flex flex-wrap items-center gap-3 border-b border-slate-100 px-5 py-4">
             <h2 className="text-sm font-semibold text-slate-900">Sent history</h2>
@@ -157,7 +162,12 @@ export default function SendsPage() {
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {pageItems.map((s, i) => (
-                        <tr key={s.id} className="hover:bg-slate-50">
+                        <tr
+                          key={s.id}
+                          onClick={() => setViewing(s)}
+                          title="Click to view the full email"
+                          className="cursor-pointer hover:bg-slate-50"
+                        >
                           <td className="px-3 py-2.5 align-middle text-slate-400">
                             {(currentPage - 1) * PAGE_SIZE + i + 1}
                           </td>
@@ -195,7 +205,10 @@ export default function SendsPage() {
                           </td>
                           <td className="px-3 py-2.5 align-middle">
                             <button
-                              onClick={() => handleDelete(s)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDelete(s);
+                              }}
                               disabled={deletingId === s.id}
                               title="Delete from history"
                               aria-label="Delete from history"
@@ -223,8 +236,112 @@ export default function SendsPage() {
           </div>
         </section>
       </main>
+
+      {/* Full-email viewer */}
+      {viewing && (
+        <div
+          className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-slate-900/50 p-4 backdrop-blur-sm"
+          onClick={() => setViewing(null)}
+        >
+          <div
+            className="my-8 w-full max-w-2xl rounded-xl border border-slate-200 bg-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="truncate text-base font-semibold text-slate-900">
+                    {viewing.name || viewing.email}
+                  </h2>
+                  {viewing.apollo_id === "demo" && (
+                    <span className="rounded-full bg-amber-200 px-1.5 py-0.5 text-[10px] font-bold uppercase text-amber-800">
+                      Demo
+                    </span>
+                  )}
+                  {viewing.status === "sent" ? (
+                    <span className={pillSent}>Sent</span>
+                  ) : (
+                    <span className={pillFailed}>Failed</span>
+                  )}
+                </div>
+                <p className="mt-0.5 truncate text-xs text-slate-500">
+                  {viewing.email}
+                  {viewing.company ? ` · ${viewing.company}` : ""} · {formatWhen(viewing.sent_at)}
+                </p>
+              </div>
+              <button
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                onClick={() => setViewing(null)}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3 p-5">
+              <div>
+                <div className="text-[11px] uppercase tracking-wide text-slate-400">Subject</div>
+                <div className="font-medium text-slate-900">{viewing.subject}</div>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-wide text-slate-400">Body</div>
+                {viewing.body ? (
+                  <div className="mt-1 max-h-[50vh] overflow-y-auto whitespace-pre-wrap rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-relaxed text-slate-700">
+                    {viewing.body}
+                  </div>
+                ) : (
+                  <p className="mt-1 text-sm text-slate-400">
+                    No body stored for this send (logged before the body column existed).
+                  </p>
+                )}
+              </div>
+              {viewing.status !== "sent" && viewing.error && (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                  <span className="font-semibold">Error:</span> {viewing.error}
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-lg bg-slate-50 p-3 text-[11px] text-slate-600 sm:grid-cols-3">
+                <span>
+                  <span className="text-slate-400">Campaign:</span>{" "}
+                  {viewing.campaign_name || <span className="text-slate-400">— (one-off send)</span>}
+                </span>
+                <span>
+                  <span className="text-slate-400">Step:</span>{" "}
+                  {viewing.step_number == null
+                    ? "—"
+                    : viewing.step_number === 1
+                    ? "Initial email"
+                    : `Follow-up ${viewing.step_number - 1}`}
+                </span>
+                <span>
+                  <span className="text-slate-400">Template:</span> {viewing.template_name || "—"}
+                </span>
+                <span className="col-span-2 sm:col-span-3">
+                  <span className="text-slate-400">Delivery:</span> {deliveryLabel(viewing)}
+                </span>
+                {viewing.message_id && (
+                  <span className="col-span-2 max-w-full truncate sm:col-span-3">
+                    <span className="text-slate-400">Message-id:</span> {viewing.message_id}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+// Human-readable delivery trail from the stamped event columns.
+function deliveryLabel(v) {
+  const parts = [];
+  parts.push(v.status === "sent" ? "accepted by Brevo" : "send failed");
+  if (v.opened_at) parts.push("opened");
+  if (v.clicked_at) parts.push("clicked");
+  if (v.bounced_at) parts.push("bounced");
+  if (v.complained_at) parts.push("spam complaint");
+  return parts.join(" · ");
 }
 
 function formatWhen(ts) {

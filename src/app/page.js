@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import Pagination from "@/components/Pagination";
+import AppHeader from "@/components/AppHeader";
+import { htmlFromBody } from "@/lib/htmlBody";
 import {
   btnPrimary,
   btnGhost,
@@ -10,7 +11,6 @@ import {
   inputCls,
   labelCls,
   codeCls,
-  tabLink,
   pillSent,
   pillFailed,
   thCls,
@@ -18,6 +18,7 @@ import {
 
 const DRAFT_KEY = "brevoEmailDraft.v1";
 const DEMO_KEY = "brevoDemoRecipient.v1";
+const BRIEF_KEY = "brevoCampaignBrief.v1";
 const PAGE_SIZE = 10;
 
 export default function Home() {
@@ -38,9 +39,20 @@ export default function Home() {
 
   const [composerOpen, setComposerOpen] = useState(false);
 
+  // AI Campaign mode: instead of one fixed email, Send generates a unique email
+  // per contact from a reusable "brief" (pitch + theme) + their company/title.
+  const [aiMode, setAiMode] = useState(false);
+  const [brief, setBrief] = useState({ pitch: "", theme: "", tone: "warm, concise", sourceUrl: "" });
+  const [briefOpen, setBriefOpen] = useState(false);
+  const [preview, setPreview] = useState(null); // { subject, body, name } | { error }
+  const [previewing, setPreviewing] = useState(false);
+  const [fetchingBrief, setFetchingBrief] = useState(false); // auto-writing brief from website
+
   // Demo / test recipient — a throwaway address, pinned as row #0 in the table.
   const [demoName, setDemoName] = useState("");
   const [demoEmail, setDemoEmail] = useState("");
+  const [demoCompany, setDemoCompany] = useState("");
+  const [demoTitle, setDemoTitle] = useState("");
   const [demoStatus, setDemoStatus] = useState(null); // { state, error }
   const [showDemo, setShowDemo] = useState(false); // demo row hidden until toggled
 
@@ -85,7 +97,15 @@ export default function Home() {
         const dd = JSON.parse(rawDemo);
         if (dd.name) setDemoName(dd.name);
         if (dd.email) setDemoEmail(dd.email);
+        if (dd.company) setDemoCompany(dd.company);
+        if (dd.title) setDemoTitle(dd.title);
         if (dd.show) setShowDemo(true);
+      }
+      const rawBrief = localStorage.getItem(BRIEF_KEY);
+      if (rawBrief) {
+        const b = JSON.parse(rawBrief);
+        if (b.brief) setBrief((prev) => ({ ...prev, ...b.brief }));
+        if (b.aiMode) setAiMode(true);
       }
     } catch {
       /* ignore corrupt draft */
@@ -105,11 +125,23 @@ export default function Home() {
   useEffect(() => {
     if (!hydrated.current) return;
     try {
-      localStorage.setItem(DEMO_KEY, JSON.stringify({ name: demoName, email: demoEmail, show: showDemo }));
+      localStorage.setItem(
+        DEMO_KEY,
+        JSON.stringify({ name: demoName, email: demoEmail, company: demoCompany, title: demoTitle, show: showDemo })
+      );
     } catch {
       /* non-fatal */
     }
-  }, [demoName, demoEmail, showDemo]);
+  }, [demoName, demoEmail, demoCompany, demoTitle, showDemo]);
+
+  useEffect(() => {
+    if (!hydrated.current) return;
+    try {
+      localStorage.setItem(BRIEF_KEY, JSON.stringify({ brief, aiMode }));
+    } catch {
+      /* non-fatal */
+    }
+  }, [brief, aiMode]);
 
   useEffect(() => {
     if (!composerOpen) return;
@@ -150,6 +182,9 @@ export default function Home() {
   const rangePct = filtered.length ? (Math.min(rangeCount, filtered.length) / filtered.length) * 100 : 0;
 
   const bodyReady = subject.trim() && body.trim();
+  const briefReady = brief.pitch.trim();
+  // "Ready to send" depends on the mode: a set email (manual) or a set brief (AI).
+  const ready = aiMode ? briefReady : bodyReady;
   const activeTemplate = templates.find((t) => String(t.id) === String(activeTemplateId));
 
   function toggleOne(id) {
@@ -258,9 +293,14 @@ export default function Home() {
   }
 
   async function sendToIds(ids) {
-    if (!bodyReady) {
-      showToast("Set the email first (top-right).", true);
-      setComposerOpen(true);
+    if (!ready) {
+      if (aiMode) {
+        showToast("Set the campaign brief first.", true);
+        setBriefOpen(true);
+      } else {
+        showToast("Set the email first (top-right).", true);
+        setComposerOpen(true);
+      }
       return;
     }
     if (ids.length === 0) {
@@ -269,20 +309,26 @@ export default function Home() {
     }
     setStatusById((prev) => {
       const next = { ...prev };
-      ids.forEach((id) => (next[id] = { state: "sending" }));
+      ids.forEach((id) => (next[id] = { state: aiMode ? "generating" : "sending" }));
       return next;
     });
     try {
-      const res = await fetch("/api/send", {
+      // AI mode generates a unique email per contact server-side, then sends.
+      // Both endpoints return the same { results: [{ id, ok, error }] } shape.
+      const res = await fetch(aiMode ? "/api/generate-send" : "/api/send", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          ids,
-          subject,
-          html: htmlFromBody(body),
-          text: body,
-          templateId: activeTemplate ? activeTemplate.id : null,
-        }),
+        body: JSON.stringify(
+          aiMode
+            ? { ids, brief }
+            : {
+                ids,
+                subject,
+                html: htmlFromBody(body),
+                text: body,
+                templateId: activeTemplate ? activeTemplate.id : null,
+              }
+        ),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Send failed");
@@ -296,7 +342,7 @@ export default function Home() {
       if (data.failed > 0) {
         showToast(`Sent ${data.sent}, failed ${data.failed}. Hover a red pill for the reason.`, true);
       } else {
-        showToast(`Sent ${data.sent} email${data.sent === 1 ? "" : "s"}. ✓`);
+        showToast(`${aiMode ? "Generated & sent" : "Sent"} ${data.sent} email${data.sent === 1 ? "" : "s"}. ✓`);
       }
     } catch (e) {
       setStatusById((prev) => {
@@ -313,33 +359,54 @@ export default function Home() {
   }
 
   async function sendDemo() {
-    if (!bodyReady) {
-      showToast("Set the email first (top-right).", true);
-      setComposerOpen(true);
+    if (!ready) {
+      if (aiMode) {
+        showToast("Set the campaign brief first.", true);
+        setBriefOpen(true);
+      } else {
+        showToast("Set the email first (top-right).", true);
+        setComposerOpen(true);
+      }
       return;
     }
     if (!demoEmail.trim()) {
       showToast("Enter a demo email address to test with.", true);
       return;
     }
-    setDemoStatus({ state: "sending" });
+    setDemoStatus({ state: aiMode ? "generating" : "sending" });
     try {
-      const res = await fetch("/api/send-test", {
+      // AI mode: generate an email from the brief + the demo company/title, then
+      // send to the typed address. Manual mode: the fixed email with tokens.
+      const res = await fetch(aiMode ? "/api/generate-send" : "/api/send-test", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          name: demoName,
-          email: demoEmail.trim(),
-          subject,
-          html: htmlFromBody(body),
-          text: body,
-          templateId: activeTemplate ? activeTemplate.id : null,
-        }),
+        body: JSON.stringify(
+          aiMode
+            ? {
+                brief,
+                testContact: {
+                  name: demoName,
+                  email: demoEmail.trim(),
+                  company: demoCompany,
+                  title: demoTitle,
+                },
+              }
+            : {
+                name: demoName,
+                email: demoEmail.trim(),
+                company: demoCompany,
+                title: demoTitle,
+                subject,
+                html: htmlFromBody(body),
+                text: body,
+                templateId: activeTemplate ? activeTemplate.id : null,
+              }
+        ),
       });
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || "Test send failed");
       setDemoStatus({ state: "sent" });
-      showToast(`Test email sent to ${demoEmail.trim()}. ✓`);
+      showToast(`${aiMode ? "Generated & sent" : "Sent"} test to ${demoEmail.trim()}. ✓`);
     } catch (e) {
       setDemoStatus({ state: "error", error: e.message });
       showToast(e.message, true);
@@ -350,6 +417,8 @@ export default function Home() {
     setShowDemo(false);
     setDemoName("");
     setDemoEmail("");
+    setDemoCompany("");
+    setDemoTitle("");
     setDemoStatus(null);
     showToast("Demo user removed.");
   }
@@ -360,13 +429,22 @@ export default function Home() {
       showToast("Select some contacts (or a range) first.", true);
       return;
     }
-    if (!bodyReady) {
-      showToast("Set the email first (top-right).", true);
-      setComposerOpen(true);
+    if (!ready) {
+      if (aiMode) {
+        showToast("Set the campaign brief first.", true);
+        setBriefOpen(true);
+      } else {
+        showToast("Set the email first (top-right).", true);
+        setComposerOpen(true);
+      }
       return;
     }
+    const n = ids.length;
     const ok = window.confirm(
-      `Send this email to ${ids.length} contact${ids.length === 1 ? "" : "s"}?\n\nThis sends real email via Brevo and cannot be undone.`
+      aiMode
+        ? `Generate a unique AI email for each of ${n} contact${n === 1 ? "" : "s"} and send via Brevo?\n\n` +
+            `This makes ${n} AI call${n === 1 ? "" : "s"} (cost) and may take a while for large batches. Real email — cannot be undone.`
+        : `Send this email to ${n} contact${n === 1 ? "" : "s"}?\n\nThis sends real email via Brevo and cannot be undone.`
     );
     if (!ok) return;
     setBulkSending(true);
@@ -374,6 +452,62 @@ export default function Home() {
       await sendToIds(ids);
     } finally {
       setBulkSending(false);
+    }
+  }
+
+  // Auto-write the campaign brief from the user's website — so they never write
+  // one by hand. Reads the site once and fills pitch + theme (still editable).
+  async function autoFillBrief() {
+    const url = (brief.sourceUrl || "").trim();
+    if (!url) {
+      showToast("Enter your website URL first (e.g. radiusai.online).", true);
+      return;
+    }
+    setFetchingBrief(true);
+    try {
+      const res = await fetch("/api/brief-from-url", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Couldn't build the brief");
+      setBrief((b) => ({ ...b, pitch: data.pitch || b.pitch, theme: data.theme || b.theme }));
+      showToast("Brief written from your website — review & tweak below. ✓");
+    } catch (e) {
+      showToast(e.message, true);
+    } finally {
+      setFetchingBrief(false);
+    }
+  }
+
+  // Generate a sample email for one contact (first selected, else first listed)
+  // so you can sanity-check the brief before a bulk blast. Sends nothing.
+  async function previewBrief() {
+    if (!briefReady) {
+      showToast("Add a product pitch to the brief first.", true);
+      return;
+    }
+    const id = [...selected][0] || filtered[0]?.apollo_id;
+    if (!id) {
+      showToast("No contact available to preview.", true);
+      return;
+    }
+    setPreviewing(true);
+    setPreview(null);
+    try {
+      const res = await fetch("/api/generate-send", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids: [id], brief, preview: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Preview failed");
+      setPreview({ subject: data.subject, body: data.body, name: data.contact?.name });
+    } catch (e) {
+      setPreview({ error: e.message });
+    } finally {
+      setPreviewing(false);
     }
   }
 
@@ -391,35 +525,57 @@ export default function Home() {
 
   return (
     <div className="min-h-screen">
-      {/* Sticky header */}
-      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-3 px-5 py-3">
-          <div className="mr-auto">
-            <h1 className="flex items-center gap-2 text-lg font-bold text-slate-900">
-              <span className="grid h-7 w-7 place-items-center rounded-md bg-blue-600 text-sm text-white">
-                ✉
-              </span>
-              Brevo Email Pipeline
-            </h1>
-            <p className="mt-0.5 text-xs text-slate-500">
-              Email your saved contacts via Brevo — one at a time, or a whole range at once.
-            </p>
+      <AppHeader
+        active="recipients"
+        width="max-w-7xl"
+        subtitle="Email saved contacts — one email, or an AI campaign that writes each."
+        actions={
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setAiMode((v) => !v)}
+              title="AI Campaign: generate a unique email per contact from a brief"
+              className={
+                aiMode
+                  ? "inline-flex items-center gap-1.5 rounded-lg border border-violet-600 bg-violet-600 px-3.5 py-2 text-sm font-semibold text-white shadow-sm"
+                  : "inline-flex items-center gap-1.5 rounded-lg border border-violet-300 bg-white px-3.5 py-2 text-sm font-medium text-violet-700 shadow-sm transition hover:bg-violet-50"
+              }
+            >
+              🎯 AI Campaign{aiMode ? ": on" : ""}
+            </button>
+            {aiMode ? (
+              <button className={btnPrimary} onClick={() => setBriefOpen(true)}>
+                Set brief
+              </button>
+            ) : (
+              <button className={btnPrimary} onClick={() => setComposerOpen(true)}>
+                Set email
+              </button>
+            )}
           </div>
-
-          <Link href="/sends" className={tabLink}>
-            <span>📤</span> Emailed Send
-          </Link>
-
-          <button className={btnPrimary} onClick={() => setComposerOpen(true)}>
-            Set email
-          </button>
-        </div>
-      </header>
+        }
+      />
 
       <main className="mx-auto max-w-7xl px-5 py-6">
         <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b border-slate-100 px-5 py-4">
-            <h2 className="text-sm font-semibold text-slate-900">Recipients</h2>
+          <div className="flex flex-wrap items-center gap-3 border-b border-slate-100 px-5 py-4">
+            <h2 className="text-sm font-semibold text-slate-900">
+              Recipients
+              <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">
+                {filtered.length}
+              </span>
+            </h2>
+            <div className="relative ml-auto">
+              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">
+                🔍
+              </span>
+              <input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search name, company, title, email…"
+                className={`${inputCls} pl-9 sm:w-80`}
+              />
+            </div>
           </div>
 
           <div className="grid grid-cols-1 gap-4 p-5 xl:grid-cols-[minmax(0,1fr)_17rem]">
@@ -441,12 +597,33 @@ export default function Home() {
               <button
                 className={btnPrimary}
                 onClick={handleSendBulk}
-                disabled={bulkSending || selected.size === 0 || !bodyReady}
-                title={!bodyReady ? "Set the email first (top-right)" : undefined}
+                disabled={bulkSending || selected.size === 0 || !ready}
+                title={!ready ? (aiMode ? "Set the campaign brief first" : "Set the email first (top-right)") : undefined}
               >
-                {bulkSending ? "Sending…" : `Send to ${selected.size} selected`}
+                {bulkSending
+                  ? aiMode
+                    ? "Generating…"
+                    : "Sending…"
+                  : aiMode
+                  ? `✨ Generate & send to ${selected.size}`
+                  : `Send to ${selected.size} selected`}
               </button>
             </div>
+
+            {aiMode && (
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-800">
+                <span className="font-semibold">🎯 AI Campaign mode</span>
+                <span className="text-violet-600">
+                  Each Send writes a unique email from your brief + the contact&apos;s company/title.
+                </span>
+                <button
+                  className={`${btnGhostSm} ml-auto border-violet-300`}
+                  onClick={() => setBriefOpen(true)}
+                >
+                  {briefReady ? "Edit brief" : "Set brief"}
+                </button>
+              </div>
+            )}
 
             {loading && <p className="text-sm text-slate-500">Loading contacts…</p>}
             {loadError && (
@@ -524,8 +701,26 @@ export default function Home() {
                             className={`${inputCls} py-1.5 text-center`}
                           />
                         </td>
-                        <td className="px-3 py-2.5 align-middle text-slate-300">—</td>
-                        <td className="px-3 py-2.5 align-middle text-slate-300">—</td>
+                        <td className="px-3 py-2 align-middle">
+                          <input
+                            type="text"
+                            value={demoTitle}
+                            onChange={(e) => setDemoTitle(e.target.value)}
+                            placeholder="Demo title"
+                            title="Used to tailor the AI-generated test email"
+                            className={`${inputCls} py-1.5 text-center`}
+                          />
+                        </td>
+                        <td className="px-3 py-2 align-middle">
+                          <input
+                            type="text"
+                            value={demoCompany}
+                            onChange={(e) => setDemoCompany(e.target.value)}
+                            placeholder="Demo company"
+                            title="Used to tailor the AI-generated test email"
+                            className={`${inputCls} py-1.5 text-center`}
+                          />
+                        </td>
                         <td className="px-3 py-2 align-middle">
                           <input
                             type="email"
@@ -537,6 +732,7 @@ export default function Home() {
                         </td>
                         <td className="px-3 py-2.5 align-middle">
                           {demoStatus?.state === "sending" && <span className="text-slate-400">Sending…</span>}
+                          {demoStatus?.state === "generating" && <span className="text-violet-500">✨ Writing…</span>}
                           {demoStatus?.state === "sent" && <span className={pillSent}>Sent</span>}
                           {demoStatus?.state === "error" && (
                             <span className={`${pillFailed} cursor-help`} title={demoStatus.error}>
@@ -548,16 +744,25 @@ export default function Home() {
                           <button
                             className={btnGhostSm}
                             onClick={sendDemo}
-                            disabled={demoStatus?.state === "sending" || !bodyReady || !demoEmail.trim()}
+                            disabled={
+                              demoStatus?.state === "sending" ||
+                              demoStatus?.state === "generating" ||
+                              !ready ||
+                              !demoEmail.trim()
+                            }
                             title={
-                              !bodyReady
-                                ? "Set the email first (top-right)"
+                              !ready
+                                ? aiMode
+                                  ? "Set the campaign brief first"
+                                  : "Set the email first (top-right)"
                                 : !demoEmail.trim()
                                 ? "Enter a demo email first"
+                                : aiMode
+                                ? "Generate an AI email from the brief + demo company/title, and send it here"
                                 : "Send this email to the demo address"
                             }
                           >
-                            Send test
+                            {aiMode ? "✨ Send test" : "Send test"}
                           </button>
                         </td>
                       </tr>
@@ -591,6 +796,7 @@ export default function Home() {
                             </td>
                             <td className="px-3 py-2.5 align-middle">
                               {st?.state === "sending" && <span className="text-slate-400">Sending…</span>}
+                              {st?.state === "generating" && <span className="text-violet-500">✨ Writing…</span>}
                               {st?.state === "sent" && <span className={pillSent}>Sent</span>}
                               {st?.state === "error" && (
                                 <span className={`${pillFailed} cursor-help`} title={st.error}>
@@ -602,10 +808,10 @@ export default function Home() {
                               <button
                                 className={btnGhostSm}
                                 onClick={() => handleSendOne(c)}
-                                disabled={st?.state === "sending" || !bodyReady}
-                                title={!bodyReady ? "Set the email first (top-right)" : undefined}
+                                disabled={st?.state === "sending" || st?.state === "generating" || !ready}
+                                title={!ready ? (aiMode ? "Set the campaign brief first" : "Set the email first (top-right)") : undefined}
                               >
-                                Send
+                                {aiMode ? "✨ Send" : "Send"}
                               </button>
                             </td>
                           </tr>
@@ -790,6 +996,134 @@ export default function Home() {
         </div>
       )}
 
+      {/* Campaign brief modal (AI mode) */}
+      {briefOpen && (
+        <div
+          className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-slate-900/50 p-4 backdrop-blur-sm"
+          onClick={() => setBriefOpen(false)}
+        >
+          <div
+            className="my-8 w-full max-w-2xl rounded-xl border border-violet-200 bg-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+              <div>
+                <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900">
+                  🎯 Campaign brief
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Set once. Every Send writes a unique email from this + the contact&apos;s company/title.
+                </p>
+              </div>
+              <button
+                className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                onClick={() => setBriefOpen(false)}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4 p-5">
+              <div className="rounded-lg border border-violet-200 bg-violet-50/60 p-3">
+                <label className={labelCls}>✨ Auto-write from your website</label>
+                <div className="flex flex-wrap gap-2">
+                  <input
+                    className={`${inputCls} min-w-[200px] flex-1`}
+                    placeholder="radiusai.online"
+                    value={brief.sourceUrl || ""}
+                    onChange={(e) => setBrief((b) => ({ ...b, sourceUrl: e.target.value }))}
+                  />
+                  <button className={btnGhost} onClick={autoFillBrief} disabled={fetchingBrief}>
+                    {fetchingBrief ? "Reading…" : "✨ Auto-fill"}
+                  </button>
+                </div>
+                <p className="mt-1.5 text-[11px] text-slate-500">
+                  Reads your site once and fills the pitch + theme below — no manual writing. You set
+                  this <strong>one</strong> brief; the AI then writes a <strong>unique</strong> email for
+                  every contact from their own company &amp; title — you never brief users one by one.
+                </p>
+              </div>
+
+              <div>
+                <label className={labelCls}>What you sell (pitch)</label>
+                <textarea
+                  value={brief.pitch}
+                  onChange={(e) => setBrief((b) => ({ ...b, pitch: e.target.value }))}
+                  placeholder="e.g. RadiusAI builds an AI resume + placement platform that gets students job-ready faster and lifts placement rates…"
+                  className={`${inputCls} min-h-[110px] resize-y leading-relaxed`}
+                />
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className={labelCls}>Theme / tagline</label>
+                  <input
+                    value={brief.theme}
+                    onChange={(e) => setBrief((b) => ({ ...b, theme: e.target.value }))}
+                    placeholder='e.g. "Placement, solved."'
+                    className={inputCls}
+                  />
+                </div>
+                <div>
+                  <label className={labelCls}>Tone</label>
+                  <input
+                    value={brief.tone}
+                    onChange={(e) => setBrief((b) => ({ ...b, tone: e.target.value }))}
+                    className={inputCls}
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-slate-600">Preview a sample</span>
+                  <button className={btnGhostSm} onClick={previewBrief} disabled={previewing || !briefReady}>
+                    {previewing ? "Writing…" : "✨ Preview"}
+                  </button>
+                </div>
+                <p className="mt-1 text-[11px] text-slate-400">
+                  Generates one email for the first selected (or first listed) contact. Sends nothing.
+                </p>
+                {preview?.error && (
+                  <p className="mt-2 rounded border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-700">
+                    {preview.error}
+                  </p>
+                )}
+                {preview && !preview.error && (
+                  <div className="mt-2 rounded border border-slate-200 bg-white p-3 text-sm">
+                    <div className="text-[11px] uppercase tracking-wide text-slate-400">
+                      To {preview.name || "contact"} — subject
+                    </div>
+                    <div className="font-medium text-slate-900">{preview.subject}</div>
+                    <div className="mt-2 whitespace-pre-wrap text-slate-700">{preview.body}</div>
+                  </div>
+                )}
+              </div>
+
+              <p className="text-xs text-slate-500">
+                Requires <code className={codeCls}>ANTHROPIC_API_KEY</code> in <code className={codeCls}>.env</code>. Uses one AI call per email at send time.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-5 py-4">
+              <button
+                className="text-sm font-medium text-slate-500 transition hover:text-red-600 disabled:opacity-50"
+                onClick={() => {
+                  setBrief({ pitch: "", theme: "", tone: "warm, concise" });
+                  setPreview(null);
+                }}
+                disabled={!brief.pitch && !brief.theme}
+              >
+                Clear brief
+              </button>
+              <button className={btnPrimary} onClick={() => setBriefOpen(false)}>
+                {briefReady ? "Save & close" : "Close"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {toast && (
         <div
           className={`fixed bottom-5 right-5 z-50 max-w-sm rounded-lg px-4 py-3 text-sm text-white shadow-xl ${
@@ -803,11 +1137,4 @@ export default function Home() {
   );
 }
 
-function htmlFromBody(text) {
-  const escaped = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const paragraphs = escaped
-    .split(/\n{2,}/)
-    .map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`)
-    .join("\n");
-  return `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#1a1d21">${paragraphs}</div>`;
-}
+// htmlFromBody moved to @/lib/htmlBody so the worker can reuse it.

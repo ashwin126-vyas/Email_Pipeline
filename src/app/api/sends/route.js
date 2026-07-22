@@ -12,13 +12,15 @@ export async function GET(req) {
 
   try {
     const { rows } = await pool.query(
-      `SELECT s.id, s.apollo_id, s.email, s.name, s.company, s.subject,
+      `SELECT s.id, s.email, s.name, s.company, s.subject, s.body,
               s.status, s.message_id, s.error, s.template_id, s.sent_at,
-              c.title AS current_title, c.industry AS current_industry,
-              t.name AS template_name
-       FROM email_sends s
-       LEFT JOIN contacts c        ON c.apollo_id = s.apollo_id
+              s.step_number, s.campaign_id,
+              s.opened_at, s.clicked_at, s.bounced_at, s.complained_at,
+              t.name AS template_name,
+              cam.name AS campaign_name
+       FROM email_logs s
        LEFT JOIN email_templates t ON t.id = s.template_id
+       LEFT JOIN campaigns cam     ON cam.id = s.campaign_id
        ORDER BY s.sent_at DESC
        LIMIT $1`,
       [limit]
@@ -32,8 +34,8 @@ export async function GET(req) {
       failed: rows.length - sent,
     });
   } catch (e) {
-    const message = /relation .*email_sends.* does not exist/i.test(e.message)
-      ? "The `email_sends` table does not exist yet. Run `npm run db:setup`."
+    const message = /relation .*email_logs.* does not exist/i.test(e.message)
+      ? "The `email_logs` table does not exist yet. Run `npm run db:setup`."
       : e.message;
     return Response.json({ error: message }, { status: 500 });
   }

@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { Pool } from "pg";
 
-// Applies schema.sql (the email_templates + email_sends tables this app owns).
+// Applies schema.sql (the email_templates + email_logs tables this app owns).
 // Run with: npm run db:setup   (which passes --env-file=.env)
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -22,7 +22,16 @@ try {
   const target = new URL(process.env.DATABASE_URL);
   console.log(`Applied schema.sql to ${target.pathname.slice(1)}`);
 
-  for (const table of ["email_templates", "email_sends"]) {
+  const tables = [
+    "email_templates",
+    "email_logs",
+    "sequences",
+    "sequence_steps",
+    "campaigns",
+    "enrollments",
+    "suppressions",
+  ];
+  for (const table of tables) {
     const { rows } = await pool.query(
       `SELECT column_name, data_type
        FROM information_schema.columns
