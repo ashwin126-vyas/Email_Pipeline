@@ -51,9 +51,12 @@ try {
       failed++;
       continue;
     }
+    // NB: research_done is NOT written here. It is derived from research_facts
+    // passing the Tier 0 completeness check (schema.sql: refresh_research_done).
+    // Notes alone are not research — `npm run facts:extract` is what earns the flag.
     await pool.query(
       `UPDATE company_campaigns
-          SET research_notes = $1, research_done = true, updated_at = now()
+          SET research_notes = $1, updated_at = now()
         WHERE id = $2`,
       [res.notes, t.tracker_id]
     );

@@ -12,8 +12,10 @@
     "classify:test": "node --env-file=.env scripts/test-classify.mjs",
     "companies:sync": "node --env-file=.env scripts/sync-companies.mjs",
     "research:companies": "node --env-file=.env scripts/research-companies.mjs",
+    "facts:extract": "node --env-file=.env scripts/extract-facts.mjs",
     "test:automation": "node --env-file=.env scripts/test-automation.mjs",
-    "test:followup": "node --env-file=.env scripts/test-followup.mjs"
+    "test:followup": "node --env-file=.env scripts/test-followup.mjs",
+    "test:derive": "node --test scripts/test-derive.mjs"
   },
   "dependencies": {
     "imapflow": "^1.4.7",
