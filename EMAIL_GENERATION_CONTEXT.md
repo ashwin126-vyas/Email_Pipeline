@@ -342,9 +342,31 @@ Current bugs in the seeded table, fix these first:
 | 2. `extract()` over existing notes | **done** — 27 companies, 2 non-buyers caught | `src/lib/extractFacts.js`, `npm run facts:extract` |
 | 3. per-person contacts table | **already existed** — `company_contacts`, 50 people | `scripts/sync-companies.mjs` |
 | 4. `derive()` + unit tests | **done** — 21 tests | `src/lib/derive.js`, `npm run test:derive` |
-| 5. `radius_block` | **not started** | — |
-| 6. `generate()` + `validate()` | **not started** | — |
-| 7. send to groups first | blocked on 5 and 6 | — |
+| 5. `radius_block` | **done** — all five segments | `src/lib/radiusBlock.js` |
+| 6. `generate()` + `validate()` | **done** — 9 gates, 16 tests | `src/lib/generateOutreach.js`, `src/lib/validateEmail.js`, `npm run email:generate` |
+| 7. send to groups first | **ready** — `--groups` orders them first | 23 drafts waiting in `email_generations` |
+
+Generation run: **23 of 24 eligible contacts passed every gate**, 23 distinct
+subject lines. The one rejection (BIT Mesra) rephrased the hook past the
+3-content-word overlap rule and is correctly held back.
+
+### Deviations from the spec, and why
+
+- **§8 `single_cta`** reads "exactly one question mark or one link". Taken
+  literally that rejects a valid imperative CTA ("Send me 50 CVs...") which has
+  neither. Enforced as **at most one of each, and never both**.
+- **§8 `facts_cited_match`** exempts routing keys (`pain_hypothesis`,
+  `segment_template`, `offer_variant`, ...) and the `constraints` block from the
+  "appears in the body" half of the check. `ats_rejection` is a slug, not a
+  phrase anyone writes; requiring it verbatim rejected correct emails. Those
+  fields must still EXIST in the input, so a hallucinated field name is caught.
+- **§7 value props carry no numbers.** The measured before/after ATS pass rate
+  does not exist yet, so there is nothing honest to quote. `PROOF_AVAILABLE` in
+  `derive.js` currently contains only `free_audit_only`; the other three proofs
+  are wired up but withheld until they are true.
+- **One retry on rejection.** A failed email is re-generated once with its gate
+  failures named, then re-validated from scratch. This took the pass rate from
+  8/24 to 23/24; most rejections were near-misses (107 words, one em-dash).
 
 ### Corrections to §9 found when checking against the live database
 

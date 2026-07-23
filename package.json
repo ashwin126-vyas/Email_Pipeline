@@ -15,7 +15,10 @@
     "facts:extract": "node --env-file=.env scripts/extract-facts.mjs",
     "test:automation": "node --env-file=.env scripts/test-automation.mjs",
     "test:followup": "node --env-file=.env scripts/test-followup.mjs",
-    "test:derive": "node --test scripts/test-derive.mjs"
+    "test:derive": "node --test scripts/test-derive.mjs",
+    "email:generate": "node --env-file=.env scripts/generate-emails.mjs",
+    "test:validate": "node --test scripts/test-validate.mjs",
+    "test": "node --test scripts/test-derive.mjs scripts/test-validate.mjs"
   },
   "dependencies": {
     "imapflow": "^1.4.7",
