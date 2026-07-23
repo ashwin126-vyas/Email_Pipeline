@@ -150,3 +150,31 @@ Return ONLY the structured object.`;
   if (!r.value?.pitch) return { error: "Couldn't derive a brief from that page. Try a different URL." };
   return { pitch: String(r.value.pitch), theme: String(r.value.theme || "") };
 }
+
+// ---- Company research (what "research_done" actually means) ---------------
+
+const RESEARCH_SCHEMA = {
+  type: "object",
+  properties: { notes: { type: "string" } },
+  required: ["notes"],
+  additionalProperties: false,
+};
+
+/**
+ * Summarise a prospect company's own website into short research notes you can
+ * use to personalise outreach. Strictly grounded in the fetched page text.
+ * @returns {Promise<{notes?: string, error?: string}>}
+ */
+export async function generateResearchNotes({ company, siteText }) {
+  if (!siteText || !siteText.trim()) return { error: "No website text to read." };
+
+  const system = `You are a B2B sales researcher. From a prospect organisation's own website text, write SHORT research notes (3–5 bullet lines, plain text, no markdown headers) that would help someone personalise outreach to them.
+Cover only what the text supports: what the institution is, its focus/strengths, anything about placements/careers/industry links, and any hook worth referencing in an email.
+Base it ONLY on the provided text — never invent facts, numbers, rankings or names. If the page is thin, say so briefly rather than padding.`;
+  const user = `Organisation: ${company || "(unknown)"}\n\nWebsite text:\n${siteText.trim().slice(0, 12000)}`;
+
+  const r = await chatJSON({ system, user, schema: RESEARCH_SCHEMA, schemaName: "research_notes", maxTokens: 700, kind: "gen" });
+  if (r.error) return { error: r.error };
+  if (!r.value?.notes) return { error: "The model returned no research notes." };
+  return { notes: String(r.value.notes) };
+}

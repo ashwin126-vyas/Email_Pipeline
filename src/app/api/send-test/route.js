@@ -7,8 +7,8 @@ import { sendEmail, renderTemplate } from "@/lib/brevo";
 // The DEMO / test path. UNLIKE /api/send (which never trusts a client-supplied
 // address and looks contacts up fresh in the DB), this route sends to the exact
 // address typed in the UI — on purpose, so you can email yourself a test before
-// touching real contacts. It logs the attempt into email_logs with
-// apollo_id = 'demo' so it shows up (marked) in Sent history like any other send.
+// touching real contacts. It logs the attempt into email_logs like any other
+// send, so it shows up in Sent history.
 export async function POST(req) {
   let body;
   try {
@@ -38,7 +38,7 @@ export async function POST(req) {
   }
 
   // A synthetic contact so the same {{token}} personalization applies.
-  const contact = { apollo_id: "demo", name, email, company, title };
+  const contact = { name, email, company, title };
   const renderedSubject = renderTemplate(subject, contact);
   const renderedText = text ? renderTemplate(text, contact) : null;
 

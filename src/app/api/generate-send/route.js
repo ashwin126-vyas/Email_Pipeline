@@ -44,7 +44,6 @@ export async function POST(req) {
       return Response.json({ error: `"${email}" is not a valid email address.` }, { status: 400 });
     }
     const contact = {
-      apollo_id: "demo",
       name: (tc.name || "").trim(),
       email,
       company: (tc.company || "").trim(),

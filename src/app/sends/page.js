@@ -177,11 +177,6 @@ export default function SendsPage() {
                           <td className="px-3 py-2.5 align-middle font-medium text-slate-900">
                             <span className="inline-flex items-center gap-1.5">
                               {s.name || <span className="text-slate-400">—</span>}
-                              {s.apollo_id === "demo" && (
-                                <span className="rounded-full bg-amber-200 px-1.5 py-0.5 text-[10px] font-bold uppercase text-amber-800">
-                                  Demo
-                                </span>
-                              )}
                             </span>
                           </td>
                           <td className="px-3 py-2.5 align-middle text-slate-700">
@@ -253,11 +248,6 @@ export default function SendsPage() {
                   <h2 className="truncate text-base font-semibold text-slate-900">
                     {viewing.name || viewing.email}
                   </h2>
-                  {viewing.apollo_id === "demo" && (
-                    <span className="rounded-full bg-amber-200 px-1.5 py-0.5 text-[10px] font-bold uppercase text-amber-800">
-                      Demo
-                    </span>
-                  )}
                   {viewing.status === "sent" ? (
                     <span className={pillSent}>Sent</span>
                   ) : (
