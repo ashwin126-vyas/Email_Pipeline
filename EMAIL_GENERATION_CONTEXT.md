@@ -388,6 +388,32 @@ institutions, not more.** B.H. Gardi now has no hook at all — its only candida
 was boilerplate — so it is blocked rather than emailed with something generic.
 That is the system working.
 
+### Measured before / after (same audit script, `npm run research:audit`)
+
+| Metric | Before | After |
+|---|---|---|
+| rows with a real source_url | 3/27 (11%) | **29/30 (97%)** |
+| citable facts with NO source | **155** | **0** |
+| recent_events carrying a date | 0 of 7 | **8 of 8** |
+| recent_events carrying a source | 0 of 7 | **8 of 8** |
+| vague anchors | 3 | **0** |
+| `placement_cell_name` | 0% | **33%** |
+| `top_recruiters` | 7% | **33%** |
+| `publishes_placement_report` | 0% | **20%** |
+| `campus_count` | 11% | **23%** |
+| `claimed_placement_rate` | 4% | **3%** |
+| institutions researched | 27 | **30** |
+| sendable | 23 | **22** |
+
+`claimed_placement_rate` going *down* is the point: per-department table rows are
+now rejected rather than averaged or cherry-picked.
+
+Regeneration on the improved facts: **17 drafts passed all gates, 6 rejected,
+6 blocked before generation** (4 no hook, 3 non-person contacts, 1 non-buyer).
+The emails now cite dated rankings, real named recruiters taken from placement
+pages, and each institution's own term for its placement team — none of which
+was available from a homepage alone.
+
 ### Deviations from the spec, and why
 
 - **§8 `single_cta`** reads "exactly one question mark or one link". Taken
