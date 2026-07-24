@@ -90,7 +90,8 @@ try {
     const c = filled(col);
     line(`   ${col.padEnd(28)} ${String(c).padStart(3)}/${n}  ${pct(c, n)}`);
   }
-  line(`   -> these come from placement pages, which we never fetched.\n`);
+  line(`   -> low numbers here are mostly honest: claimed_placement_rate stays near`);
+  line(`      zero because per-department tables are rejected, not averaged.\n`);
 
   // 6. Coverage of the list as a whole.
   const { rows: cov } = await pool.query(
