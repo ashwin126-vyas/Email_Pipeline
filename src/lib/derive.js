@@ -7,6 +7,7 @@
 // WHICH angle to take — it only writes the prose for the angle chosen here.
 
 import { CONFIDENCE_FLOOR } from "./extractFacts.js";
+import { nameProblem } from "./personName.js";
 
 export const SEGMENTS = ["group", "elite", "private_uni", "college", "non_engineering"];
 export const PAINS = [
@@ -125,6 +126,13 @@ export function blockReasons(f, hook) {
   if (!f.institution_type) out.push("missing institution_type");
   if (!f.program_mix) out.push("missing program_mix");
   if (!f.contact_name) out.push("missing contact_name (never write 'Dear Sir/Madam')");
+  else {
+    // A shared mailbox that Apollo title-cased into "Placement Ssce" is not a
+    // name. "Dear Placement Ssce," proves the email was automated, which is
+    // worse than not sending at all.
+    const problem = nameProblem(f.contact_name);
+    if (problem) out.push(`contact_name "${f.contact_name}" is not a person (${problem})`);
+  }
   if (!f.contact_title) out.push("missing contact_title");
   if (!f.contact_email) out.push("missing contact_email");
   if (!hook?.hook_sentence) out.push("no hook — an email with no hook is worse than no email");

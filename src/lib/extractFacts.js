@@ -73,13 +73,21 @@ const FACTS_SCHEMA = obj({
   // ── Tier 2: the pitch surface ───────────────────────────────────────────
   claimed_placement_rate: {
     type: ["object", "null"],
+    description:
+      "The INSTITUTION-WIDE placement rate the institution itself publishes. A single row from a per-department table is NOT this — output null instead.",
     properties: {
       value: nnum("Percentage, e.g. 92.0"),
       year: nint(""),
+      basis: {
+        type: ["string", "null"],
+        enum: ["institution_wide", "single_department", "single_programme", "unclear", null],
+        description: "What population the figure covers. Only institution_wide is usable.",
+      },
+      cohort_size: nint("Number of students the figure is calculated over, if stated."),
       source_url: nstr(""),
       confidence: nnum("0.0-1.0"),
     },
-    required: ["value", "year", "source_url", "confidence"],
+    required: ["value", "year", "basis", "cohort_size", "source_url", "confidence"],
     additionalProperties: false,
   },
   median_package_lpa: nnum("Lakhs per annum."),
@@ -97,6 +105,15 @@ const FACTS_SCHEMA = obj({
   naac_grade: nstr("e.g. 'A++'."),
   tech_focus_signals: { type: "array", items: { type: "string", enum: TECH_SIGNALS } },
 
+  // ── Entity guard ────────────────────────────────────────────────────────
+  is_multi_institution_trust: nbool(
+    "True when this website covers SEVERAL institutions under one trust or group (e.g. an engineering college plus a homoeopathy, nursing or ayurveda college)."),
+  sibling_institutions: {
+    type: "array",
+    items: { type: "string" },
+    description: "Other institutions on this site that are NOT the target institution. Empty when the site covers only the target.",
+  },
+
   // ── Provenance ──────────────────────────────────────────────────────────
   // An array (not a map) because strict mode forbids arbitrary object keys.
   provenance: {
@@ -104,7 +121,7 @@ const FACTS_SCHEMA = obj({
     description: "One entry per Tier 1/Tier 2 field you filled in.",
     items: obj({
       field: { type: "string", description: "The field name this backs." },
-      source_url: nstr(""),
+      source_url: nstr("MUST be copied exactly from the [SOURCE n] url= line the fact came from."),
       confidence: { type: "number", description: "0.0-1.0. Below 0.8 means it will not be used." },
     }),
   },
@@ -128,29 +145,166 @@ RULES
    a description of a different institution. "Focuses on placements" fails this
    test. "16,000+ alumni across 40 countries" passes.
 7. Set is_valid_buyer to false when the organisation has no student placement
-   function (training companies, ed-tech vendors, consultancies) and state why.`;
+   function (training companies, ed-tech vendors, consultancies) and state why.
+8. SOURCES. The material is a series of [SOURCE n] blocks, each with a url= line.
+   Every source_url you output must be copied EXACTLY from one of those url=
+   lines. Never invent a URL, never guess one, never leave it null for a Tier 1
+   or Tier 2 fact. A fact whose source_url is not one of the given URLs is
+   discarded by code, so an unsourced fact is a wasted one.
+9. ONE INSTITUTION ONLY. You are extracting facts about the TARGET INSTITUTION
+   named below and nothing else. Many of these websites belong to a trust that
+   also runs a homoeopathy, nursing, ayurveda, pharmacy or law college. Those are
+   SIBLINGS, not the target. An accreditation, ranking or achievement belonging
+   to a sibling must NEVER be recorded as the target's. List the siblings you
+   see in sibling_institutions and set is_multi_institution_trust accordingly.
+   If a fact could belong to either, output null. Attributing a sibling's
+   accreditation to the target destroys the lead.
+10. PLACEMENT TABLES. These sites usually publish placement figures broken down
+   BY DEPARTMENT and BY YEAR. A single row of such a table is not the
+   institution's placement rate. "CIVIL 2 registered, 2 placed, 100%" is a
+   two-student department, and quoting it back as "your 100% placement rate"
+   tells the reader you did not understand their own data. Only record
+   claimed_placement_rate when the institution states ONE figure for the whole
+   institution, and set basis accordingly. When you only have a per-department
+   table, output null. The same applies to package figures: prefer the number
+   the institution headlines, not the largest one you can find.
+11. SPECIFICITY. "Affiliated to GTU", "approved by AICTE" and "NAAC accredited"
+   are true of hundreds of institutions and are NOT specificity anchors. The
+   anchor must be something that would be false of every other institution.`;
 
 const clamp = (v, allowed) => (allowed.includes(v) ? v : null);
+
+// Routing/classification fields. These decide which template is used, are never
+// quoted in an email, and so do not need a citable source.
+const ROUTING_FIELDS = new Set([
+  "institution_name", "institution_type", "program_mix", "role_type",
+  "is_valid_buyer", "invalid_reason", "campus_count",
+  "contact_name", "contact_title", "contact_email",
+]);
+
+// Disciplines that identify a sibling college inside a trust.
+const DISCIPLINES = [
+  "homoeopathy", "homeopathy", "ayurved", "ayurveda", "unani", "naturopathy",
+  "nursing", "dental", "medical", "physiotherapy", "law", "polytechnic",
+];
+
+/**
+ * Everything a model asserted but could not source is demoted below the
+ * confidence floor here, in code. Instructions are a request; this is the rule.
+ *
+ * @param {object} facts       mutated in place
+ * @param {Set<string>} allowedUrls  the URLs actually fetched
+ * @returns {{demoted: string[], event_dropped: string|null, sibling_conflicts: string[]}}
+ */
+export function enforceSourcing(facts, allowedUrls) {
+  const report = { demoted: [], event_dropped: null, sibling_conflicts: [] };
+  const urls = allowedUrls instanceof Set ? allowedUrls : new Set(allowedUrls || []);
+
+  for (const [field, p] of Object.entries(facts.provenance || {})) {
+    if (ROUTING_FIELDS.has(field)) continue;
+    const sourced = p?.source_url && urls.has(p.source_url);
+    if (!sourced && Number(p?.confidence) >= CONFIDENCE_FLOOR) {
+      // Stored for audit, but permanently below the floor, so buildContract()
+      // will never hand it to the generator.
+      p.confidence = 0.5;
+      p.unsourced = true;
+      report.demoted.push(field);
+    }
+  }
+
+  // §2: a recent_event must be dated within 12 months AND carry a source.
+  // Anything else is not an event, it is a sentence about the past.
+  const ev = facts.recent_event;
+  if (ev && ev.type && ev.type !== "none_found") {
+    const sourced = ev.source_url && urls.has(ev.source_url);
+    const dated = Boolean(ev.date);
+    const fresh = dated && (Date.now() - new Date(ev.date).getTime()) < 400 * 24 * 3600 * 1000;
+    if (!sourced || !dated || !fresh) {
+      report.event_dropped = !dated ? "no date" : !sourced ? "unsourced" : "older than 12 months";
+      facts.recent_event = { type: "none_found", summary: null, date: null, source_url: null };
+    }
+  }
+
+  // Placement-rate discipline. A per-department row is not an institution's
+  // placement rate, and "100%" is nearly always a tiny department. Citing it
+  // back at the person who owns the real number is a lead-killer.
+  const rate = facts.claimed_placement_rate;
+  if (rate && rate.value != null) {
+    const v = Number(rate.value);
+    let reject = null;
+    if (!Number.isFinite(v) || v < 0 || v > 100) reject = "out of range";
+    else if (rate.basis && rate.basis !== "institution_wide") reject = `basis=${rate.basis}`;
+    else if (!rate.basis || rate.basis === "unclear") reject = "basis unclear";
+    else if (v >= 99.5 && (rate.cohort_size == null || rate.cohort_size < 50)) {
+      reject = "100% over an unstated or tiny cohort";
+    }
+    if (reject) {
+      report.rate_rejected = reject;
+      facts.claimed_placement_rate = null;
+      if (facts.provenance?.claimed_placement_rate) facts.provenance.claimed_placement_rate.confidence = 0;
+    }
+  }
+
+  // Anchor specificity. "Affiliated to GTU" is true of hundreds of colleges, so
+  // it proves nothing and reads as a mail merge.
+  const GENERIC_ANCHOR = /affiliated\s+(to|with)|approved\s+by\s+(aicte|ugc|pci|bci|nba)|recognis?zed\s+by|iso\s*\d|committed\s+to|focus(es)?\s+on|state[- ]of[- ]the[- ]art|world[- ]class|holistic/i;
+  const anchorText = String(facts.specificity_anchor || "");
+  if (anchorText && GENERIC_ANCHOR.test(anchorText) && !/\d/.test(anchorText)) {
+    report.anchor_rejected = "generic (affiliation/approval boilerplate, no distinguishing detail)";
+    facts.specificity_anchor = null;
+    if (facts.provenance?.specificity_anchor) facts.provenance.specificity_anchor.confidence = 0;
+  }
+
+  // Sibling guard: an anchor about the trust's homoeopathy college is not a fact
+  // about the engineering college we are writing to.
+  const siblings = Array.isArray(facts.sibling_institutions) ? facts.sibling_institutions : [];
+  if (facts.is_multi_institution_trust || siblings.length) {
+    const target = String(facts.institution_name || "").toLowerCase();
+    const anchor = String(facts.specificity_anchor || "").toLowerCase();
+    if (anchor) {
+      const targetDiscipline = DISCIPLINES.filter((d) => target.includes(d));
+      const anchorDiscipline = DISCIPLINES.filter((d) => anchor.includes(d));
+      const conflict = anchorDiscipline.filter((d) => !targetDiscipline.includes(d));
+      if (conflict.length) {
+        report.sibling_conflicts.push(`anchor mentions ${conflict.join("/")}, target does not`);
+        facts.specificity_anchor = null;
+        if (facts.provenance?.specificity_anchor) facts.provenance.specificity_anchor.confidence = 0;
+      }
+    }
+  }
+  return report;
+}
 
 /**
  * Extract typed research facts for one institution.
  * @param {object} a
  * @param {string} a.company          company name (fallback for institution_name)
- * @param {string} a.sourceMaterial   research notes + scraped page text
+ * @param {Array<{url,text,kind}>} [a.documents] crawled pages — preferred input
+ * @param {string} [a.sourceMaterial] fallback prose when there is no crawl
  * @param {object} [a.contact]        { name, title, email } from company_contacts
- * @returns {Promise<{facts?: object, error?: string}>}
+ * @returns {Promise<{facts?: object, quality?: object, error?: string}>}
  */
-export async function extractResearchFacts({ company, sourceMaterial, contact }) {
-  if (!sourceMaterial || !sourceMaterial.trim()) {
-    return { error: "No source material to extract from." };
-  }
+export async function extractResearchFacts({ company, documents, sourceMaterial, contact }) {
+  const docs = Array.isArray(documents) ? documents : [];
+  const material = docs.length
+    ? docs.map((d, i) => `[SOURCE ${i + 1}] kind=${d.kind} url=${d.url}\n${d.text}`).join("\n\n---\n\n")
+    : String(sourceMaterial || "");
+  if (!material.trim()) return { error: "No source material to extract from." };
+  const allowedUrls = new Set(docs.map((d) => d.url));
+
   const c = contact || {};
   const user = [
-    `ORGANISATION: ${company || "(unknown)"}`,
-    c.title ? `KNOWN CONTACT TITLE (classify role_type from this): ${c.title}` : ``,
+    `TARGET INSTITUTION: ${company || "(unknown)"}`,
+    `Extract facts about THIS institution only. Other institutions appearing in`,
+    `the sources are siblings under the same trust — list them, do not adopt`,
+    `their achievements.`,
+    c.title ? `\nKNOWN CONTACT TITLE (classify role_type from this): ${c.title}` : ``,
+    docs.length
+      ? `\nYou may cite ONLY these URLs:\n${docs.map((d, i) => `  [SOURCE ${i + 1}] ${d.url}`).join("\n")}`
+      : `\nNo page URLs are available for this institution, so every Tier 1 and Tier 2\nfact must be given confidence below ${CONFIDENCE_FLOOR}.`,
     ``,
     `SOURCE MATERIAL`,
-    sourceMaterial.trim().slice(0, 16000),
+    material.slice(0, 60000),
   ].filter(Boolean).join("\n");
 
   const r = await chatJSON({
@@ -214,9 +368,18 @@ export async function extractResearchFacts({ company, sourceMaterial, contact })
     naac_grade: v.naac_grade || null,
     tech_focus_signals: (Array.isArray(v.tech_focus_signals) ? v.tech_focus_signals : [])
       .filter((s) => TECH_SIGNALS.includes(s) && s !== "none"),
+
+    // Entity guard
+    is_multi_institution_trust: typeof v.is_multi_institution_trust === "boolean" ? v.is_multi_institution_trust : null,
+    sibling_institutions: (Array.isArray(v.sibling_institutions) ? v.sibling_institutions : []).filter(Boolean).slice(0, 12),
+
     provenance,
+    source_urls: [...allowedUrls],
   };
-  return { facts };
+
+  // Instructions are a request; this is the rule.
+  const quality = enforceSourcing(facts, allowedUrls);
+  return { facts, quality };
 }
 
 /**
@@ -224,7 +387,7 @@ export async function extractResearchFacts({ company, sourceMaterial, contact })
  * The research_facts trigger recomputes company_campaigns.research_done.
  * @returns {Promise<number>} the new row id
  */
-export async function saveResearchFacts(pool, { companyId, facts, sourceMaterial, model }) {
+export async function saveResearchFacts(pool, { companyId, facts, sourceMaterial, model, quality }) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -246,7 +409,8 @@ export async function saveResearchFacts(pool, { companyId, facts, sourceMaterial
          claimed_placement_rate, median_package_lpa, highest_package_lpa, top_recruiters,
          publishes_placement_report, placement_report_url, existing_placement_tech,
          nirf_rank, naac_grade, tech_focus_signals,
-         provenance, extraction_model, source_material)
+         is_multi_institution_trust, sibling_institutions,
+         provenance, extraction_model, source_material, source_urls, quality)
        VALUES ($1,$2,true,
                $3,$4,$5,$6,
                $7,$8,$9,
@@ -255,7 +419,8 @@ export async function saveResearchFacts(pool, { companyId, facts, sourceMaterial
                $18,$19,$20,$21,
                $22,$23,$24,
                $25,$26,$27,
-               $28,$29,$30)
+               $28,$29,
+               $30,$31,$32,$33,$34)
        RETURNING id`,
       [
         companyId, Number(prev[0].v) + 1,
@@ -267,7 +432,9 @@ export async function saveResearchFacts(pool, { companyId, facts, sourceMaterial
         facts.median_package_lpa, facts.highest_package_lpa, facts.top_recruiters,
         facts.publishes_placement_report, facts.placement_report_url, facts.existing_placement_tech,
         facts.nirf_rank ? JSON.stringify(facts.nirf_rank) : null, facts.naac_grade, facts.tech_focus_signals,
+        facts.is_multi_institution_trust, facts.sibling_institutions || [],
         JSON.stringify(facts.provenance || {}), model || null, (sourceMaterial || "").slice(0, 20000),
+        facts.source_urls || [], JSON.stringify(quality || {}),
       ]
     );
     await client.query("COMMIT");

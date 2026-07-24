@@ -350,6 +350,44 @@ Generation run: **23 of 24 eligible contacts passed every gate**, 23 distinct
 subject lines. The one rejection (BIT Mesra) rephrased the hook past the
 3-content-word overlap rule and is correctly held back.
 
+### Research quality: what the first pass got wrong
+
+The first research pass fetched **one page** (the homepage), summarised it into
+prose, and extracted facts from the prose. `npm run research:audit` measured the
+damage:
+
+| Symptom | Cause |
+|---|---|
+| 155 facts marked citable (≥0.8) with **no source_url** | a prose summary contains no URLs, so the model had nothing to cite and invented confidence instead |
+| **0 of 7** "recent events" carried a date or a source | homepages rarely date anything; these were not events |
+| **0/27** had a placement rate, cohort size or placement cell name | all of that lives on `/placement`, which was never opened |
+| B.H. Gardi College of **Engineering** was given an **A+ homoeopathy accreditation** as its hook | the site is a trust that also runs homoeopathy, nursing and ayurveda colleges. A sibling's fact became the target's |
+| 7 of 50 "contacts" were shared mailboxes ("Placement Ssce", "Training Cell", "Tpo Shegaon") | Apollo title-cases `placement@` into something that looks like a name |
+
+**The fix is architectural, not prompt tuning:**
+
+1. **Crawl the pages that hold the facts** (`src/lib/researchCrawl.js`) — up to 6
+   pages per institution, each with its URL retained.
+2. **Extract from labelled sources, not prose.** The model is shown
+   `[SOURCE n] url=…` blocks and must copy a URL exactly.
+3. **Enforce in code what the prompt requests** (`enforceSourcing()`). A fact
+   that cannot name a crawled URL is demoted below the citation floor. This is
+   the difference between asking a model to be careful and making carelessness
+   impossible.
+4. **Guard the entity.** Extract `is_multi_institution_trust` and
+   `sibling_institutions`; drop facts whose discipline conflicts with the target.
+5. **Guard the numbers.** `claimed_placement_rate` needs
+   `basis = institution_wide`. A per-department row is not an institution's rate.
+6. **Guard the anchor.** Affiliation and approval boilerplate is not a
+   specificity anchor.
+7. **Guard the salutation.** `isPersonName()` blocks non-person contacts at the
+   Tier 0 gate.
+
+**The tradeoff is deliberate: better research produces FEWER sendable
+institutions, not more.** B.H. Gardi now has no hook at all — its only candidate
+was boilerplate — so it is blocked rather than emailed with something generic.
+That is the system working.
+
 ### Deviations from the spec, and why
 
 - **§8 `single_cta`** reads "exactly one question mark or one link". Taken

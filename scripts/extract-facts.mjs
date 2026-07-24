@@ -13,6 +13,7 @@
 
 import { pool } from "../src/lib/db.js";
 import { extractResearchFacts, saveResearchFacts, CONFIDENCE_FLOOR } from "../src/lib/extractFacts.js";
+import { crawlInstitution } from "../src/lib/researchCrawl.js";
 import { aiProvider } from "../src/lib/llm.js";
 
 const args = process.argv.slice(2);
@@ -30,11 +31,12 @@ try {
   // One row per company: its notes plus its primary (first) real contact.
   const { rows: targets } = await pool.query(
     `SELECT DISTINCT ON (cam.company_id)
-            cam.company_id, cam.company, cam.research_notes,
+            cam.company_id, cam.company, cam.research_notes, cc.website_url,
             cc.person AS contact_name, cc.title AS contact_title, cc.email AS contact_email
        FROM company_campaigns cam
        JOIN company_contacts cc ON cc.company_id = cam.company_id
-      WHERE btrim(COALESCE(cam.research_notes, '')) <> ''
+      WHERE (btrim(COALESCE(cam.research_notes, '')) <> ''
+             OR btrim(COALESCE(cc.website_url, '')) <> '')
         ${refresh ? "" : `AND NOT EXISTS (SELECT 1 FROM research_facts rf
                                            WHERE rf.company_id = cam.company_id AND rf.is_current)`}
       ORDER BY cam.company_id, cc.id
@@ -50,12 +52,23 @@ try {
     console.log(`Extracting facts for ${targets.length} company(ies) via ${provider}…\n`);
   }
 
-  let ok = 0, failed = 0, blocked = 0, tier0 = 0;
+  let ok = 0, failed = 0, blocked = 0, tier0 = 0, crawled = 0;
   for (const t of targets) {
     const label = (t.company || "").slice(0, 38).padEnd(38);
-    const { facts, error } = await extractResearchFacts({
+
+    // Crawl the real pages so facts can carry a real source_url. Falling back to
+    // the prose notes means nothing will clear the confidence floor — which is
+    // the correct outcome, not a bug.
+    let documents = [];
+    if (t.website_url) {
+      const crawl = await crawlInstitution(t.website_url);
+      if (crawl.documents) { documents = crawl.documents; crawled++; }
+    }
+
+    const { facts, quality, error } = await extractResearchFacts({
       company: t.company,
-      sourceMaterial: t.research_notes,
+      documents,
+      sourceMaterial: documents.length ? null : t.research_notes,
       contact: { name: t.contact_name, title: t.contact_title, email: t.contact_email },
     });
     if (error) {
@@ -67,7 +80,10 @@ try {
     const id = await saveResearchFacts(pool, {
       companyId: t.company_id,
       facts,
-      sourceMaterial: t.research_notes,
+      quality,
+      sourceMaterial: documents.length
+        ? documents.map((d) => `${d.kind} ${d.url}`).join("\n")
+        : t.research_notes,
       model: provider,
     });
     const { rows: saved } = await pool.query(
@@ -85,9 +101,13 @@ try {
       ? `event:${facts.recent_event.type}`
       : facts.specificity_anchor ? "anchor" : "NO HOOK";
     const cited = Object.values(facts.provenance).filter((p) => p.confidence >= CONFIDENCE_FLOOR).length;
+    const notes = [];
+    if (quality?.demoted?.length) notes.push(`demoted:${quality.demoted.length}`);
+    if (quality?.event_dropped) notes.push(`event dropped (${quality.event_dropped})`);
+    if (quality?.sibling_conflicts?.length) notes.push(`SIBLING FACT REMOVED`);
     console.log(
-      `  ✓ ${label} ${(facts.institution_type || "?").padEnd(20)} ${(facts.program_mix || "?").padEnd(13)}` +
-      ` tier0:${saved[0].tier0_complete ? "Y" : "n"} ${hook.padEnd(28)} citable:${cited}`
+      `  ✓ ${label} ${String(documents.length).padStart(2)}pg ${(facts.institution_type || "?").padEnd(19)}` +
+      ` tier0:${saved[0].tier0_complete ? "Y" : "n"} ${hook.padEnd(26)} citable:${String(cited).padEnd(2)} ${notes.join(" ")}`
     );
     ok++;
   }
