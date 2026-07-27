@@ -72,8 +72,8 @@ export async function POST(req) {
       ? body.target_filter
       : {};
   const dailyCap = clampInt(body.daily_cap, 1, 100000, 30);
-  const windowStart = clampInt(body.window_start, 0, 23, 9);
-  const windowEnd = clampInt(body.window_end, 1, 24, 18);
+  const windowStart = clampInt(body.window_start, 0, 23, 12);
+  const windowEnd = clampInt(body.window_end, 1, 24, 20);
   const timezone = (body.timezone || "Asia/Kolkata").trim();
 
   try {

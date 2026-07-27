@@ -329,8 +329,8 @@ function AIComposer({ onChange, onError, onFlash }) {
             sequence_id: seqData.sequence.id,
             target_filter: { title_ilike: segment.trim() },
             daily_cap: 30,
-            window_start: 9,
-            window_end: 18,
+            window_start: 12,
+            window_end: 20,
             timezone: "Asia/Kolkata",
           }),
         });
@@ -658,8 +658,8 @@ function CampaignBuilder({ sequences, onChange, onError, onFlash }) {
     company_ilike: "",
     industry_ilike: "",
     daily_cap: 30,
-    window_start: 9,
-    window_end: 18,
+    window_start: 12,
+    window_end: 20,
     timezone: "Asia/Kolkata",
   });
   const [saving, setSaving] = useState(false);
