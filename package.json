@@ -10,7 +10,6 @@
     "db:setup": "node --env-file=.env scripts/setup-db.mjs",
     "worker": "node --env-file=.env worker/index.mjs",
     "classify:test": "node --env-file=.env scripts/test-classify.mjs",
-    "imap:test": "node --env-file=.env scripts/test-imap.mjs",
     "companies:sync": "node --env-file=.env scripts/sync-companies.mjs",
     "research:companies": "node --env-file=.env scripts/research-companies.mjs",
     "facts:extract": "node --env-file=.env scripts/extract-facts.mjs",
@@ -24,8 +23,6 @@
     "test:research": "node --test scripts/test-research.mjs"
   },
   "dependencies": {
-    "imapflow": "^1.4.7",
-    "mailparser": "^3.9.14",
     "next": "16.2.3",
     "node-cron": "^4.6.0",
     "pg": "^8.20.0",

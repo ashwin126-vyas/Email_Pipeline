@@ -1,5 +1,5 @@
 // Quick check that the AI reply classifier is wired up and your key works —
-// without needing the IMAP mailbox. Run:
+// without touching the database. Run:
 //
 //   node --env-file=.env scripts/test-classify.mjs
 //   node --env-file=.env scripts/test-classify.mjs "your own reply text here"
@@ -26,7 +26,7 @@ console.log(hasKey ? "ANTHROPIC_API_KEY is set — classifying with Claude.\n" :
 for (const s of samples) {
   const result = await classifyReply(s);
   const label = result?.label ?? null;
-  // Mirror what worker/reply-scan.mjs would do with this label.
+  // Mirror what src/lib/replies.js would do with this label.
   const action =
     label === "out_of_office"
       ? "DEFER a few days (keep sequencing)"
@@ -43,4 +43,4 @@ for (const s of samples) {
   console.log(`    action: ${action}\n`);
 }
 
-console.log("Done. Wire IMAP_* (see .env.example) to run this automatically on real replies.");
+console.log("Done. Replies reach the DB via POST /api/replies (see src/lib/replies.js).");
