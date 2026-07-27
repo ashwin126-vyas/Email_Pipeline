@@ -10,6 +10,7 @@
     "db:setup": "node --env-file=.env scripts/setup-db.mjs",
     "worker": "node --env-file=.env worker/index.mjs",
     "classify:test": "node --env-file=.env scripts/test-classify.mjs",
+    "imap:test": "node --env-file=.env scripts/test-imap.mjs",
     "companies:sync": "node --env-file=.env scripts/sync-companies.mjs",
     "research:companies": "node --env-file=.env scripts/research-companies.mjs",
     "facts:extract": "node --env-file=.env scripts/extract-facts.mjs",
