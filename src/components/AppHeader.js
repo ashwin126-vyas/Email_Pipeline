@@ -8,9 +8,11 @@
 import Link from "next/link";
 import { tabLink, tabLinkActive } from "@/lib/ui";
 
+// The campaign is generated automatically per organisation inside the
+// generation chain, so there is no campaign tab to run one by hand.
 const NAV = [
   { key: "recipients", href: "/", label: "Recipients", icon: "✉" },
-  { key: "campaigns", href: "/campaigns", label: "Campaigns", icon: "🤖" },
+  { key: "generation", href: "/generation", label: "Generation", icon: "✨" },
   { key: "sends", href: "/sends", label: "Sent", icon: "📤" },
 ];
 

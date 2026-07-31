@@ -1,20 +1,18 @@
 // The automation worker — a long-running process, NOT a Next route.
 // Run it alongside the app:  npm run worker  (node --env-file=.env worker/index.mjs)
 //
-// One timer:
+// Two timers:
 //   • send tick  (SEND_INTERVAL_MINUTES, default 2) — the heartbeat: send who's
 //     due, advance follow-ups. See worker/engine.mjs.
+//   • reply scan (REPLY_INTERVAL_MINUTES, default 5) — poll the reply mailbox and
+//     stop anyone who answered. Dormant unless IMAP_* is configured.
 //
-// There is NO reply polling. Nothing here reads a mailbox, so a contact who
-// replies is not detected and their sequence is NOT stopped automatically —
-// replies reach the DB only when something calls POST /api/replies (see
-// src/lib/replies.js). Recording a reply there still stops the sequence.
-//
-// A single in-process lock prevents overlapping runs (SKIP LOCKED in the DB
-// additionally guards against two separate worker processes).
+// A single in-process lock per timer prevents overlapping runs (SKIP LOCKED in
+// the DB additionally guards against two separate worker processes).
 
 import cron from "node-cron";
 import { runTick } from "./engine.mjs";
+import { scanReplies, replyScanEnabled } from "./reply-scan.mjs";
 
 const now = () => new Date().toISOString();
 function log(...a) {
@@ -22,6 +20,7 @@ function log(...a) {
 }
 
 const SEND_INTERVAL = parseInt(process.env.SEND_INTERVAL_MINUTES || "2", 10) || 2;
+const REPLY_INTERVAL = parseInt(process.env.REPLY_INTERVAL_MINUTES || "5", 10) || 5;
 
 // Guard so a long tick never overlaps the next scheduled fire.
 function guarded(name, fn) {
@@ -47,16 +46,24 @@ const sendTick = guarded("send-tick", async () => {
   if (summary.sent > 0) log(`tick done: ${summary.sent} sent across ${summary.campaigns} active campaign(s)`);
 });
 
-log(`starting. send every ${SEND_INTERVAL}m. Reply polling: NOT INSTALLED — follow-ups do not stop on reply.`);
+const replyTick = guarded("reply-scan", async () => {
+  await scanReplies();
+});
+
+log(`starting. send every ${SEND_INTERVAL}m, reply scan ${replyScanEnabled() ? `every ${REPLY_INTERVAL}m` : "DISABLED (no IMAP_* set)"}.`);
 if (!process.env.DATABASE_URL) {
   log("WARNING: DATABASE_URL is not set — did you run via `npm run worker` (which passes --env-file=.env)?");
 }
 
-// node-cron expression. */n minutes.
+// node-cron expressions. */n minutes.
 cron.schedule(`*/${SEND_INTERVAL} * * * *`, sendTick);
+if (replyScanEnabled()) {
+  cron.schedule(`*/${REPLY_INTERVAL} * * * *`, replyTick);
+}
 
 // Kick one pass immediately on boot so we don't wait a full interval.
 sendTick();
+if (replyScanEnabled()) replyTick();
 
 // Graceful shutdown so the process manager can restart us cleanly.
 for (const sig of ["SIGINT", "SIGTERM"]) {

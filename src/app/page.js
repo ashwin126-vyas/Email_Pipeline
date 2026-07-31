@@ -1,6 +1,18 @@
 "use client";
 
+// Recipients — the contact list, and the three things you do to a contact:
+//
+//   Generate  → research + campaign + email for THIS person (30–90s, one row in
+//               email_testing, visible on the Generation tab)
+//   Follow-up → the 2-step sequence written against that email
+//   Send      → sends what was already generated. Sending never generates: the
+//               email that goes out is the one that was read in Preview.
+//
+// A contact with no generated email still sends the fixed draft from Set email,
+// personalised with tokens — that is the manual path, unchanged.
+
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import Pagination from "@/components/Pagination";
 import AppHeader from "@/components/AppHeader";
 import { htmlFromBody } from "@/lib/htmlBody";
@@ -18,7 +30,9 @@ import {
 
 const DRAFT_KEY = "brevoEmailDraft.v1";
 const DEMO_KEY = "brevoDemoRecipient.v1";
-const BRIEF_KEY = "brevoCampaignBrief.v1";
+// Written by the Generation tab's form. Row-level Generate reuses the intent
+// set there rather than asking for it again on every row.
+const GEN_FORM_KEY = "radiusGenerationForm.v1";
 const PAGE_SIZE = 10;
 
 export default function Home() {
@@ -39,14 +53,13 @@ export default function Home() {
 
   const [composerOpen, setComposerOpen] = useState(false);
 
-  // AI Campaign mode: instead of one fixed email, Send generates a unique email
-  // per contact from a reusable "brief" (pitch + theme) + their company/title.
-  const [aiMode, setAiMode] = useState(false);
-  const [brief, setBrief] = useState({ pitch: "", theme: "", tone: "warm, concise", sourceUrl: "" });
-  const [briefOpen, setBriefOpen] = useState(false);
-  const [preview, setPreview] = useState(null); // { subject, body, name } | { error }
-  const [previewing, setPreviewing] = useState(false);
-  const [fetchingBrief, setFetchingBrief] = useState(false); // auto-writing brief from website
+  // What has already been generated, keyed by lower(email). Filled from the
+  // server for the visible page, so a row generated last week (or from the
+  // Generation tab) still opens in Preview instead of offering Generate again.
+  const [genByEmail, setGenByEmail] = useState({});
+  const [rowBusy, setRowBusy] = useState({}); // apollo_id -> "generating" | "followup"
+  const [preview, setPreview] = useState(null); // { contact, id, data, loading }
+  const [genDefaults, setGenDefaults] = useState({ email_intent: "", sender_context: "" });
 
   // Demo / test recipient — a throwaway address, pinned as row #0 in the table.
   const [demoName, setDemoName] = useState("");
@@ -101,11 +114,13 @@ export default function Home() {
         if (dd.title) setDemoTitle(dd.title);
         if (dd.show) setShowDemo(true);
       }
-      const rawBrief = localStorage.getItem(BRIEF_KEY);
-      if (rawBrief) {
-        const b = JSON.parse(rawBrief);
-        if (b.brief) setBrief((prev) => ({ ...prev, ...b.brief }));
-        if (b.aiMode) setAiMode(true);
+      const rawGen = localStorage.getItem(GEN_FORM_KEY);
+      if (rawGen) {
+        const g = JSON.parse(rawGen);
+        setGenDefaults({
+          email_intent: g.email_intent || "",
+          sender_context: g.sender_context || "",
+        });
       }
     } catch {
       /* ignore corrupt draft */
@@ -135,20 +150,18 @@ export default function Home() {
   }, [demoName, demoEmail, demoCompany, demoTitle, showDemo]);
 
   useEffect(() => {
-    if (!hydrated.current) return;
-    try {
-      localStorage.setItem(BRIEF_KEY, JSON.stringify({ brief, aiMode }));
-    } catch {
-      /* non-fatal */
-    }
-  }, [brief, aiMode]);
-
-  useEffect(() => {
     if (!composerOpen) return;
     const onKey = (e) => e.key === "Escape" && setComposerOpen(false);
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [composerOpen]);
+
+  useEffect(() => {
+    if (!preview) return;
+    const onKey = (e) => e.key === "Escape" && setPreview(null);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [preview]);
 
   // Back to page 1 (and reset the range) whenever the filter changes.
   useEffect(() => {
@@ -182,10 +195,37 @@ export default function Home() {
   const rangePct = filtered.length ? (Math.min(rangeCount, filtered.length) / filtered.length) * 100 : 0;
 
   const bodyReady = subject.trim() && body.trim();
-  const briefReady = brief.pitch.trim();
-  // "Ready to send" depends on the mode: a set email (manual) or a set brief (AI).
-  const ready = aiMode ? briefReady : bodyReady;
   const activeTemplate = templates.find((t) => String(t.id) === String(activeTemplateId));
+
+  const genOf = (contact) => (contact?.email ? genByEmail[contact.email.toLowerCase()] : null);
+
+  // Ask the server which of the visible contacts already have a generated email.
+  // Scoped to the page rather than the whole list: the selection can be 2,500
+  // contacts and only ten of them are on screen.
+  const pageKey = pageItems.map((c) => c.apollo_id).join(",");
+  useEffect(() => {
+    const emails = pageItems.map((c) => c.email).filter(Boolean);
+    if (emails.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/email-testing/lookup", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ emails }),
+        });
+        const data = await res.json();
+        if (!res.ok || cancelled) return;
+        setGenByEmail((prev) => ({ ...prev, ...(data.generated || {}) }));
+      } catch {
+        /* the table still works without it — Generate just stays offered */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageKey]);
 
   function toggleOne(id) {
     setSelected((prev) => {
@@ -292,58 +332,176 @@ export default function Home() {
     showToast("Email cleared.");
   }
 
-  async function sendToIds(ids) {
-    if (!ready) {
-      if (aiMode) {
-        showToast("Set the campaign brief first.", true);
-        setBriefOpen(true);
-      } else {
-        showToast("Set the email first (top-right).", true);
-        setComposerOpen(true);
-      }
+  // ── Generation ──────────────────────────────────────────────────────────────
+
+  // Research this contact, write the org campaign if it has none yet, then write
+  // their email. Lands in email_testing, so it shows up on the Generation tab.
+  // Nothing is sent.
+  // Regenerating writes a NEW email for this person and leaves the org campaign
+  // alone: the campaign is shared by everyone at that institution, so silently
+  // replacing it from one contact's row would rewrite their colleagues' framing
+  // too. That switch lives on the Generation tab, where it is explicit.
+  async function generateFor(contact) {
+    const id = contact.apollo_id;
+    if (rowBusy[id]) return;
+    setRowBusy((b) => ({ ...b, [id]: "generating" }));
+    try {
+      const res = await fetch("/api/email-testing", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          person: {
+            full_name: contact.name || contact.email,
+            email: contact.email,
+            position: contact.title || undefined,
+            university: contact.company || undefined,
+          },
+          email_intent: genDefaults.email_intent || undefined,
+          sender_context: genDefaults.sender_context || undefined,
+          run_label: "recipients",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Generation failed");
+
+      const row = {
+        id: data.id,
+        subject: data.email?.subject,
+        body: data.email?.body,
+        is_valid: Boolean(data.email?.valid),
+        status: data.email?.valid ? "draft" : "rejected",
+        org_name: data.research?.university?.name || contact.company,
+        campaign_line: data.campaign?.campaign_line || null,
+        warnings: data.email?.warnings || [],
+        followup_count: 0,
+        created_at: new Date().toISOString(),
+      };
+      setGenByEmail((prev) => ({ ...prev, [contact.email.toLowerCase()]: row }));
+      showToast(
+        data.email?.valid
+          ? `Email written for ${contact.name || contact.email}. ✓`
+          : "Written, but it failed a gate — read it in Preview before sending.",
+        !data.email?.valid
+      );
+      openPreview(contact, data.id);
+    } catch (e) {
+      showToast(e.message, true);
+    } finally {
+      setRowBusy((b) => {
+        const next = { ...b };
+        delete next[id];
+        return next;
+      });
+    }
+  }
+
+  // The 2-step sequence for an already-generated email. Step 1 (+3 days) adds one
+  // new specific; step 2 (+7 days) is short and easy to decline.
+  async function followupFor(contact, { regenerate = false } = {}) {
+    const gen = genOf(contact);
+    if (!gen) {
+      showToast("Generate the email first — a follow-up is written against it.", true);
       return;
     }
+    const id = contact.apollo_id;
+    if (rowBusy[id]) return;
+    setRowBusy((b) => ({ ...b, [id]: "followup" }));
+    try {
+      const res = await fetch("/api/followup-testing", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email_testing_id: gen.id, steps: [1, 2], regenerate }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Follow-up generation failed");
+      const steps = data.followups || [];
+      setGenByEmail((prev) => ({
+        ...prev,
+        [contact.email.toLowerCase()]: { ...gen, followup_count: steps.length },
+      }));
+      showToast(`${steps.filter((f) => f.valid).length}/${steps.length} follow-up steps passed every gate.`);
+      openPreview(contact, gen.id, "followups");
+    } catch (e) {
+      showToast(e.message, true);
+    } finally {
+      setRowBusy((b) => {
+        const next = { ...b };
+        delete next[id];
+        return next;
+      });
+    }
+  }
+
+  // Preview — the generated email exactly as it will be sent, with its follow-up
+  // steps and the gates it passed or failed. `focus` scrolls straight to the
+  // sequence, so the Follow-up column's Preview lands on the follow-ups rather
+  // than making you scroll past the email you have already read.
+  async function openPreview(contact, runId, focus = null) {
+    const id = runId || genOf(contact)?.id;
+    if (!id) return;
+    setPreview({ contact, id, focus, loading: true, data: null });
+    try {
+      const res = await fetch(`/api/email-testing/${id}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not load the generated email");
+      setPreview({ contact, id, focus, loading: false, data });
+    } catch (e) {
+      setPreview({ contact, id, focus, loading: false, data: null, error: e.message });
+    }
+  }
+
+  // ── Sending ─────────────────────────────────────────────────────────────────
+
+  // One send path for everything. `prefer_generated` makes the server use each
+  // contact's generated email where there is one and the draft where there is
+  // not — Send never writes an email.
+  async function sendToIds(ids, { allowRejected = false } = {}) {
     if (ids.length === 0) {
       showToast("No contacts selected.", true);
-      return;
+      return null;
     }
     setStatusById((prev) => {
       const next = { ...prev };
-      ids.forEach((id) => (next[id] = { state: aiMode ? "generating" : "sending" }));
+      ids.forEach((id) => (next[id] = { state: "sending" }));
       return next;
     });
     try {
-      // AI mode generates a unique email per contact server-side, then sends.
-      // Both endpoints return the same { results: [{ id, ok, error }] } shape.
-      const res = await fetch(aiMode ? "/api/generate-send" : "/api/send", {
+      const res = await fetch("/api/send", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(
-          aiMode
-            ? { ids, brief }
-            : {
-                ids,
+        body: JSON.stringify({
+          ids,
+          prefer_generated: true,
+          allow_rejected: allowRejected,
+          ...(bodyReady
+            ? {
                 subject,
                 html: htmlFromBody(body),
                 text: body,
                 templateId: activeTemplate ? activeTemplate.id : null,
               }
-        ),
+            : {}),
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Send failed");
       setStatusById((prev) => {
         const next = { ...prev };
         for (const r of data.results || []) {
-          next[r.id] = r.ok ? { state: "sent" } : { state: "error", error: r.error };
+          next[r.id] = r.ok ? { state: "sent", source: r.source } : { state: "error", error: r.error };
         }
         return next;
       });
       if (data.failed > 0) {
         showToast(`Sent ${data.sent}, failed ${data.failed}. Hover a red pill for the reason.`, true);
       } else {
-        showToast(`${aiMode ? "Generated & sent" : "Sent"} ${data.sent} email${data.sent === 1 ? "" : "s"}. ✓`);
+        showToast(
+          `Sent ${data.sent} email${data.sent === 1 ? "" : "s"}` +
+            (data.fromGenerated ? ` (${data.fromGenerated} generated)` : "") +
+            ". ✓"
+        );
       }
+      return data;
     } catch (e) {
       setStatusById((prev) => {
         const next = { ...prev };
@@ -351,62 +509,90 @@ export default function Home() {
         return next;
       });
       showToast(e.message, true);
+      return null;
     }
   }
 
   async function handleSendOne(contact) {
-    await sendToIds([contact.apollo_id]);
+    const gen = genOf(contact);
+    if (!gen && !bodyReady) {
+      showToast("Generate an email for this contact, or set one email for everyone.", true);
+      return;
+    }
+    // A draft that failed a gate is refused by the server unless the sender says
+    // they have read it. Ask here rather than sending something unreviewed.
+    let allowRejected = false;
+    if (gen && !gen.is_valid) {
+      const ok = window.confirm(
+        `${contact.name || contact.email}'s generated email did not pass every validation gate.\n\n` +
+          `Send it anyway? Real email — this cannot be undone.`
+      );
+      if (!ok) return;
+      allowRejected = true;
+    } else {
+      const ok = window.confirm(
+        gen
+          ? `Send the generated email to ${contact.email}?\n\nReal email — this cannot be undone.`
+          : `Send the email you set to ${contact.email}?\n\nReal email — this cannot be undone.`
+      );
+      if (!ok) return;
+    }
+    await sendToIds([contact.apollo_id], { allowRejected });
+  }
+
+  async function handleSendBulk() {
+    const ids = [...selected];
+    if (ids.length === 0) {
+      showToast("Select some contacts (or a range) first.", true);
+      return;
+    }
+    const n = ids.length;
+    const ok = window.confirm(
+      `Send to ${n} contact${n === 1 ? "" : "s"}?\n\n` +
+        `Each contact gets their own generated email where one exists` +
+        (bodyReady ? `, and the email you set where it does not.` : `. Contacts with no generated email are skipped.`) +
+        `\n\nDrafts that failed a validation gate are skipped — send those one at a time after reading them in Preview.` +
+        `\n\nReal email via Brevo. This cannot be undone.`
+    );
+    if (!ok) return;
+    setBulkSending(true);
+    try {
+      await sendToIds(ids);
+    } finally {
+      setBulkSending(false);
+    }
   }
 
   async function sendDemo() {
-    if (!ready) {
-      if (aiMode) {
-        showToast("Set the campaign brief first.", true);
-        setBriefOpen(true);
-      } else {
-        showToast("Set the email first (top-right).", true);
-        setComposerOpen(true);
-      }
+    if (!bodyReady) {
+      showToast("Set the email first (top-right).", true);
+      setComposerOpen(true);
       return;
     }
     if (!demoEmail.trim()) {
       showToast("Enter a demo email address to test with.", true);
       return;
     }
-    setDemoStatus({ state: aiMode ? "generating" : "sending" });
+    setDemoStatus({ state: "sending" });
     try {
-      // AI mode: generate an email from the brief + the demo company/title, then
-      // send to the typed address. Manual mode: the fixed email with tokens.
-      const res = await fetch(aiMode ? "/api/generate-send" : "/api/send-test", {
+      const res = await fetch("/api/send-test", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(
-          aiMode
-            ? {
-                brief,
-                testContact: {
-                  name: demoName,
-                  email: demoEmail.trim(),
-                  company: demoCompany,
-                  title: demoTitle,
-                },
-              }
-            : {
-                name: demoName,
-                email: demoEmail.trim(),
-                company: demoCompany,
-                title: demoTitle,
-                subject,
-                html: htmlFromBody(body),
-                text: body,
-                templateId: activeTemplate ? activeTemplate.id : null,
-              }
-        ),
+        body: JSON.stringify({
+          name: demoName,
+          email: demoEmail.trim(),
+          company: demoCompany,
+          title: demoTitle,
+          subject,
+          html: htmlFromBody(body),
+          text: body,
+          templateId: activeTemplate ? activeTemplate.id : null,
+        }),
       });
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || "Test send failed");
       setDemoStatus({ state: "sent" });
-      showToast(`${aiMode ? "Generated & sent" : "Sent"} test to ${demoEmail.trim()}. ✓`);
+      showToast(`Sent test to ${demoEmail.trim()}. ✓`);
     } catch (e) {
       setDemoStatus({ state: "error", error: e.message });
       showToast(e.message, true);
@@ -421,94 +607,6 @@ export default function Home() {
     setDemoTitle("");
     setDemoStatus(null);
     showToast("Demo user removed.");
-  }
-
-  async function handleSendBulk() {
-    const ids = [...selected];
-    if (ids.length === 0) {
-      showToast("Select some contacts (or a range) first.", true);
-      return;
-    }
-    if (!ready) {
-      if (aiMode) {
-        showToast("Set the campaign brief first.", true);
-        setBriefOpen(true);
-      } else {
-        showToast("Set the email first (top-right).", true);
-        setComposerOpen(true);
-      }
-      return;
-    }
-    const n = ids.length;
-    const ok = window.confirm(
-      aiMode
-        ? `Generate a unique AI email for each of ${n} contact${n === 1 ? "" : "s"} and send via Brevo?\n\n` +
-            `This makes ${n} AI call${n === 1 ? "" : "s"} (cost) and may take a while for large batches. Real email — cannot be undone.`
-        : `Send this email to ${n} contact${n === 1 ? "" : "s"}?\n\nThis sends real email via Brevo and cannot be undone.`
-    );
-    if (!ok) return;
-    setBulkSending(true);
-    try {
-      await sendToIds(ids);
-    } finally {
-      setBulkSending(false);
-    }
-  }
-
-  // Auto-write the campaign brief from the user's website — so they never write
-  // one by hand. Reads the site once and fills pitch + theme (still editable).
-  async function autoFillBrief() {
-    const url = (brief.sourceUrl || "").trim();
-    if (!url) {
-      showToast("Enter your website URL first (e.g. radiusai.online).", true);
-      return;
-    }
-    setFetchingBrief(true);
-    try {
-      const res = await fetch("/api/brief-from-url", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ url }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Couldn't build the brief");
-      setBrief((b) => ({ ...b, pitch: data.pitch || b.pitch, theme: data.theme || b.theme }));
-      showToast("Brief written from your website — review & tweak below. ✓");
-    } catch (e) {
-      showToast(e.message, true);
-    } finally {
-      setFetchingBrief(false);
-    }
-  }
-
-  // Generate a sample email for one contact (first selected, else first listed)
-  // so you can sanity-check the brief before a bulk blast. Sends nothing.
-  async function previewBrief() {
-    if (!briefReady) {
-      showToast("Add a product pitch to the brief first.", true);
-      return;
-    }
-    const id = [...selected][0] || filtered[0]?.apollo_id;
-    if (!id) {
-      showToast("No contact available to preview.", true);
-      return;
-    }
-    setPreviewing(true);
-    setPreview(null);
-    try {
-      const res = await fetch("/api/generate-send", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ids: [id], brief, preview: true }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Preview failed");
-      setPreview({ subject: data.subject, body: data.body, name: data.contact?.name });
-    } catch (e) {
-      setPreview({ error: e.message });
-    } finally {
-      setPreviewing(false);
-    }
   }
 
   const allOnPageSelected =
@@ -528,30 +626,11 @@ export default function Home() {
       <AppHeader
         active="recipients"
         width="max-w-7xl"
-        subtitle="Email saved contacts — one email, or an AI campaign that writes each."
+        subtitle="Generate an email per contact, read it, then send."
         actions={
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setAiMode((v) => !v)}
-              title="AI Campaign: generate a unique email per contact from a brief"
-              className={
-                aiMode
-                  ? "inline-flex items-center gap-1.5 rounded-lg border border-violet-600 bg-violet-600 px-3.5 py-2 text-sm font-semibold text-white shadow-sm"
-                  : "inline-flex items-center gap-1.5 rounded-lg border border-violet-300 bg-white px-3.5 py-2 text-sm font-medium text-violet-700 shadow-sm transition hover:bg-violet-50"
-              }
-            >
-              🎯 AI Campaign{aiMode ? ": on" : ""}
-            </button>
-            {aiMode ? (
-              <button className={btnPrimary} onClick={() => setBriefOpen(true)}>
-                Set brief
-              </button>
-            ) : (
-              <button className={btnPrimary} onClick={() => setComposerOpen(true)}>
-                Set email
-              </button>
-            )}
-          </div>
+          <button className={btnPrimary} onClick={() => setComposerOpen(true)}>
+            Set email
+          </button>
         }
       />
 
@@ -581,7 +660,7 @@ export default function Home() {
           <div className="grid grid-cols-1 gap-4 p-5 xl:grid-cols-[minmax(0,1fr)_17rem]">
             {/* Left column: demo toggle + the recipients table */}
             <div className="min-w-0 space-y-4">
-            {/* Top bar — Demo toggle (left) · bulk Send (right, above the Action column) */}
+            {/* Top bar — Demo toggle (left) · bulk Send (right, above the Send column) */}
             <div className="flex flex-wrap items-center justify-between gap-2">
               <button
                 className={
@@ -597,33 +676,24 @@ export default function Home() {
               <button
                 className={btnPrimary}
                 onClick={handleSendBulk}
-                disabled={bulkSending || selected.size === 0 || !ready}
-                title={!ready ? (aiMode ? "Set the campaign brief first" : "Set the email first (top-right)") : undefined}
+                disabled={bulkSending || selected.size === 0}
+                title="Sends each contact their generated email, or the email you set"
               >
-                {bulkSending
-                  ? aiMode
-                    ? "Generating…"
-                    : "Sending…"
-                  : aiMode
-                  ? `✨ Generate & send to ${selected.size}`
-                  : `Send to ${selected.size} selected`}
+                {bulkSending ? "Sending…" : `Send to ${selected.size} selected`}
               </button>
             </div>
 
-            {aiMode && (
-              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-800">
-                <span className="font-semibold">🎯 AI Campaign mode</span>
-                <span className="text-violet-600">
-                  Each Send writes a unique email from your brief + the contact&apos;s company/title.
-                </span>
-                <button
-                  className={`${btnGhostSm} ml-auto border-violet-300`}
-                  onClick={() => setBriefOpen(true)}
-                >
-                  {briefReady ? "Edit brief" : "Set brief"}
-                </button>
-              </div>
-            )}
+            <p className="flex flex-wrap items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+              <span className="font-semibold text-slate-700">✨ Generate</span>
+              researches the contact and writes their email ·
+              <span className="font-semibold text-slate-700">↪ Follow-up</span>
+              adds the 2-step sequence ·
+              <span className="font-semibold text-slate-700">Send</span>
+              only sends what is already written.
+              <Link href="/generation" className="ml-auto font-medium text-blue-600 hover:underline">
+                Generation tab ↗
+              </Link>
+            </p>
 
             {loading && <p className="text-sm text-slate-500">Loading contacts…</p>}
             {loadError && (
@@ -635,16 +705,18 @@ export default function Home() {
             {!loading && !loadError && (
               <div className="overflow-hidden rounded-lg border border-slate-200">
                 <div className="scrollbar-thin overflow-x-auto">
-                  <table className="w-full min-w-[880px] table-fixed text-sm text-center">
+                  <table className="w-full min-w-[1080px] table-fixed text-sm text-center">
                     <colgroup>
                       <col className="w-12" />
-                      <col className="w-14" />
-                      <col className="w-[16%]" />
-                      <col className="w-[20%]" />
-                      <col className="w-[20%]" />
-                      <col className="w-[24%]" />
-                      <col className="w-24" />
+                      <col className="w-12" />
+                      <col className="w-[14%]" />
+                      <col className="w-[15%]" />
+                      <col className="w-[15%]" />
+                      <col className="w-[19%]" />
                       <col className="w-28" />
+                      <col className="w-28" />
+                      <col className="w-24" />
+                      <col className="w-20" />
                     </colgroup>
                     <thead className="bg-slate-50">
                       <tr>
@@ -662,8 +734,10 @@ export default function Home() {
                         <th className={thCls}>Title</th>
                         <th className={thCls}>Company</th>
                         <th className={thCls}>Email</th>
+                        <th className={thCls}>Generate</th>
+                        <th className={thCls}>Follow-up</th>
                         <th className={thCls}>Status</th>
-                        <th className={thCls}>Action</th>
+                        <th className={thCls}>Send</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -707,7 +781,6 @@ export default function Home() {
                             value={demoTitle}
                             onChange={(e) => setDemoTitle(e.target.value)}
                             placeholder="Demo title"
-                            title="Used to tailor the AI-generated test email"
                             className={`${inputCls} py-1.5 text-center`}
                           />
                         </td>
@@ -717,7 +790,6 @@ export default function Home() {
                             value={demoCompany}
                             onChange={(e) => setDemoCompany(e.target.value)}
                             placeholder="Demo company"
-                            title="Used to tailor the AI-generated test email"
                             className={`${inputCls} py-1.5 text-center`}
                           />
                         </td>
@@ -730,9 +802,11 @@ export default function Home() {
                             className={`${inputCls} py-1.5 text-center`}
                           />
                         </td>
+                        {/* Generation is per real contact — the demo row only tests the fixed email. */}
+                        <td className="px-3 py-2.5 align-middle text-slate-300">—</td>
+                        <td className="px-3 py-2.5 align-middle text-slate-300">—</td>
                         <td className="px-3 py-2.5 align-middle">
                           {demoStatus?.state === "sending" && <span className="text-slate-400">Sending…</span>}
-                          {demoStatus?.state === "generating" && <span className="text-violet-500">✨ Writing…</span>}
                           {demoStatus?.state === "sent" && <span className={pillSent}>Sent</span>}
                           {demoStatus?.state === "error" && (
                             <span className={`${pillFailed} cursor-help`} title={demoStatus.error}>
@@ -744,25 +818,16 @@ export default function Home() {
                           <button
                             className={btnGhostSm}
                             onClick={sendDemo}
-                            disabled={
-                              demoStatus?.state === "sending" ||
-                              demoStatus?.state === "generating" ||
-                              !ready ||
-                              !demoEmail.trim()
-                            }
+                            disabled={demoStatus?.state === "sending" || !bodyReady || !demoEmail.trim()}
                             title={
-                              !ready
-                                ? aiMode
-                                  ? "Set the campaign brief first"
-                                  : "Set the email first (top-right)"
+                              !bodyReady
+                                ? "Set the email first (top-right)"
                                 : !demoEmail.trim()
                                 ? "Enter a demo email first"
-                                : aiMode
-                                ? "Generate an AI email from the brief + demo company/title, and send it here"
-                                : "Send this email to the demo address"
+                                : "Send the email you set to the demo address"
                             }
                           >
-                            {aiMode ? "✨ Send test" : "Send test"}
+                            Send test
                           </button>
                         </td>
                       </tr>
@@ -770,6 +835,8 @@ export default function Home() {
 
                       {pageItems.map((c, i) => {
                         const st = statusById[c.apollo_id];
+                        const gen = genOf(c);
+                        const busy = rowBusy[c.apollo_id];
                         const rowNum = (currentPage - 1) * PAGE_SIZE + i + 1;
                         return (
                           <tr key={c.apollo_id} className="hover:bg-slate-50">
@@ -794,24 +861,92 @@ export default function Home() {
                             <td className="truncate px-3 py-2.5 align-middle text-slate-500" title={c.email}>
                               {c.email}
                             </td>
+
+                            {/* Generate — becomes Preview once there is an email to read. */}
                             <td className="px-3 py-2.5 align-middle">
-                              {st?.state === "sending" && <span className="text-slate-400">Sending…</span>}
-                              {st?.state === "generating" && <span className="text-violet-500">✨ Writing…</span>}
-                              {st?.state === "sent" && <span className={pillSent}>Sent</span>}
-                              {st?.state === "error" && (
+                              {busy === "generating" ? (
+                                <span className="text-xs text-violet-500">✨ Writing…</span>
+                              ) : gen ? (
+                                <button
+                                  className={btnGhostSm}
+                                  onClick={() => openPreview(c)}
+                                  title={gen.subject || "Read the generated email"}
+                                >
+                                  👁 Preview
+                                </button>
+                              ) : (
+                                <button
+                                  className={btnGhostSm}
+                                  onClick={() => generateFor(c)}
+                                  disabled={Boolean(busy)}
+                                  title="Research this contact and write their email (30–90s). Sends nothing."
+                                >
+                                  ✨ Generate
+                                </button>
+                              )}
+                            </td>
+
+                            {/* Follow-up — the 2-step sequence for that email. */}
+                            <td className="px-3 py-2.5 align-middle">
+                              {busy === "followup" ? (
+                                <span className="text-xs text-violet-500">↪ Writing…</span>
+                              ) : gen?.followup_count > 0 ? (
+                                <button
+                                  className={btnGhostSm}
+                                  onClick={() => openPreview(c, null, "followups")}
+                                  title={`Read the ${gen.followup_count}-step follow-up sequence`}
+                                >
+                                  👁 Preview ({gen.followup_count})
+                                </button>
+                              ) : (
+                                <button
+                                  className={btnGhostSm}
+                                  onClick={() => followupFor(c)}
+                                  disabled={!gen || Boolean(busy)}
+                                  title={gen ? "Write the 2-step follow-up sequence" : "Generate the email first"}
+                                >
+                                  ↪ Follow-up
+                                </button>
+                              )}
+                            </td>
+
+                            <td className="px-3 py-2.5 align-middle">
+                              {st?.state === "sending" ? (
+                                <span className="text-slate-400">Sending…</span>
+                              ) : st?.state === "sent" ? (
+                                <span className={pillSent}>Sent</span>
+                              ) : st?.state === "error" ? (
                                 <span className={`${pillFailed} cursor-help`} title={st.error}>
                                   Failed
                                 </span>
-                              )}
+                              ) : gen ? (
+                                <span
+                                  className={
+                                    gen.is_valid
+                                      ? "inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-semibold text-blue-700"
+                                      : "inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800"
+                                  }
+                                  title={gen.is_valid ? "Generated draft, passed every gate" : "Generated, but failed a gate"}
+                                >
+                                  {gen.is_valid ? "Draft" : "Rejected"}
+                                </span>
+                              ) : null}
                             </td>
+
                             <td className="px-3 py-2.5 align-middle">
                               <button
                                 className={btnGhostSm}
                                 onClick={() => handleSendOne(c)}
-                                disabled={st?.state === "sending" || st?.state === "generating" || !ready}
-                                title={!ready ? (aiMode ? "Set the campaign brief first" : "Set the email first (top-right)") : undefined}
+                                disabled={st?.state === "sending" || (!gen && !bodyReady)}
+                                title={
+                                  gen
+                                    ? "Send the generated email"
+                                    : bodyReady
+                                    ? "Send the email you set"
+                                    : "Generate an email, or set one for everyone"
+                                }
                               >
-                                {aiMode ? "✨ Send" : "Send"}
+                                Send
                               </button>
                             </td>
                           </tr>
@@ -820,7 +955,7 @@ export default function Home() {
 
                       {pageItems.length === 0 && (
                         <tr>
-                          <td colSpan={8} className="px-3 py-8 text-center text-slate-400">
+                          <td colSpan={10} className="px-3 py-8 text-center text-slate-400">
                             No contacts match.
                           </td>
                         </tr>
@@ -896,6 +1031,18 @@ export default function Home() {
         </section>
       </main>
 
+      {/* Preview — the generated email, its gates and its follow-up steps */}
+      {preview && (
+        <PreviewModal
+          preview={preview}
+          busy={rowBusy[preview.contact.apollo_id]}
+          onClose={() => setPreview(null)}
+          onRegenerate={() => generateFor(preview.contact)}
+          onFollowup={(regenerate) => followupFor(preview.contact, { regenerate })}
+          onSend={() => handleSendOne(preview.contact)}
+        />
+      )}
+
       {/* Composer modal */}
       {composerOpen && (
         <div
@@ -909,7 +1056,9 @@ export default function Home() {
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
               <div>
                 <h2 className="text-base font-semibold text-slate-900">Set email</h2>
-                <p className="text-xs text-slate-500">Saved automatically and reused until you change it.</p>
+                <p className="text-xs text-slate-500">
+                  The fallback for contacts with no generated email. Saved automatically and reused until you change it.
+                </p>
               </div>
               <button
                 className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
@@ -996,134 +1145,6 @@ export default function Home() {
         </div>
       )}
 
-      {/* Campaign brief modal (AI mode) */}
-      {briefOpen && (
-        <div
-          className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-slate-900/50 p-4 backdrop-blur-sm"
-          onClick={() => setBriefOpen(false)}
-        >
-          <div
-            className="my-8 w-full max-w-2xl rounded-xl border border-violet-200 bg-white shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-              <div>
-                <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900">
-                  🎯 Campaign brief
-                </h2>
-                <p className="text-xs text-slate-500">
-                  Set once. Every Send writes a unique email from this + the contact&apos;s company/title.
-                </p>
-              </div>
-              <button
-                className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-                onClick={() => setBriefOpen(false)}
-                aria-label="Close"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="space-y-4 p-5">
-              <div className="rounded-lg border border-violet-200 bg-violet-50/60 p-3">
-                <label className={labelCls}>✨ Auto-write from your website</label>
-                <div className="flex flex-wrap gap-2">
-                  <input
-                    className={`${inputCls} min-w-[200px] flex-1`}
-                    placeholder="radiusai.online"
-                    value={brief.sourceUrl || ""}
-                    onChange={(e) => setBrief((b) => ({ ...b, sourceUrl: e.target.value }))}
-                  />
-                  <button className={btnGhost} onClick={autoFillBrief} disabled={fetchingBrief}>
-                    {fetchingBrief ? "Reading…" : "✨ Auto-fill"}
-                  </button>
-                </div>
-                <p className="mt-1.5 text-[11px] text-slate-500">
-                  Reads your site once and fills the pitch + theme below — no manual writing. You set
-                  this <strong>one</strong> brief; the AI then writes a <strong>unique</strong> email for
-                  every contact from their own company &amp; title — you never brief users one by one.
-                </p>
-              </div>
-
-              <div>
-                <label className={labelCls}>What you sell (pitch)</label>
-                <textarea
-                  value={brief.pitch}
-                  onChange={(e) => setBrief((b) => ({ ...b, pitch: e.target.value }))}
-                  placeholder="e.g. RadiusAI builds an AI resume + placement platform that gets students job-ready faster and lifts placement rates…"
-                  className={`${inputCls} min-h-[110px] resize-y leading-relaxed`}
-                />
-              </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <label className={labelCls}>Theme / tagline</label>
-                  <input
-                    value={brief.theme}
-                    onChange={(e) => setBrief((b) => ({ ...b, theme: e.target.value }))}
-                    placeholder='e.g. "Placement, solved."'
-                    className={inputCls}
-                  />
-                </div>
-                <div>
-                  <label className={labelCls}>Tone</label>
-                  <input
-                    value={brief.tone}
-                    onChange={(e) => setBrief((b) => ({ ...b, tone: e.target.value }))}
-                    className={inputCls}
-                  />
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-slate-600">Preview a sample</span>
-                  <button className={btnGhostSm} onClick={previewBrief} disabled={previewing || !briefReady}>
-                    {previewing ? "Writing…" : "✨ Preview"}
-                  </button>
-                </div>
-                <p className="mt-1 text-[11px] text-slate-400">
-                  Generates one email for the first selected (or first listed) contact. Sends nothing.
-                </p>
-                {preview?.error && (
-                  <p className="mt-2 rounded border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-700">
-                    {preview.error}
-                  </p>
-                )}
-                {preview && !preview.error && (
-                  <div className="mt-2 rounded border border-slate-200 bg-white p-3 text-sm">
-                    <div className="text-[11px] uppercase tracking-wide text-slate-400">
-                      To {preview.name || "contact"} — subject
-                    </div>
-                    <div className="font-medium text-slate-900">{preview.subject}</div>
-                    <div className="mt-2 whitespace-pre-wrap text-slate-700">{preview.body}</div>
-                  </div>
-                )}
-              </div>
-
-              <p className="text-xs text-slate-500">
-                Requires <code className={codeCls}>ANTHROPIC_API_KEY</code> in <code className={codeCls}>.env</code>. Uses one AI call per email at send time.
-              </p>
-            </div>
-
-            <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-5 py-4">
-              <button
-                className="text-sm font-medium text-slate-500 transition hover:text-red-600 disabled:opacity-50"
-                onClick={() => {
-                  setBrief({ pitch: "", theme: "", tone: "warm, concise" });
-                  setPreview(null);
-                }}
-                disabled={!brief.pitch && !brief.theme}
-              >
-                Clear brief
-              </button>
-              <button className={btnPrimary} onClick={() => setBriefOpen(false)}>
-                {briefReady ? "Save & close" : "Close"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {toast && (
         <div
           className={`fixed bottom-5 right-5 z-50 max-w-sm rounded-lg px-4 py-3 text-sm text-white shadow-xl ${
@@ -1133,6 +1154,181 @@ export default function Home() {
           {toast.msg}
         </div>
       )}
+    </div>
+  );
+}
+
+// The generated email exactly as it will go out, with the gates it passed or
+// failed and the follow-up steps written against it. Read before send — that is
+// the whole reason Send no longer generates.
+function PreviewModal({ preview, busy, onClose, onRegenerate, onFollowup, onSend }) {
+  const { contact, data, loading, error, focus } = preview;
+  const run = data?.run;
+  const followups = data?.followups || [];
+  const failedGates = Object.entries(run?.validation || {}).filter(([, g]) => !g?.pass);
+  const sequenceRef = useRef(null);
+
+  // Opened from the Follow-up column: show the sequence, not the top of an email
+  // that has already been read.
+  useEffect(() => {
+    if (focus === "followups" && sequenceRef.current) {
+      sequenceRef.current.scrollIntoView({ block: "start", behavior: "smooth" });
+    }
+  }, [focus, data]);
+
+  return (
+    <div
+      className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-slate-900/50 p-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="my-8 w-full max-w-3xl rounded-xl border border-slate-200 bg-white shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">Preview</h2>
+            <p className="text-xs text-slate-500">
+              {contact.name || contact.email}
+              {contact.company ? ` · ${contact.company}` : ""} — generated, not sent.
+            </p>
+          </div>
+          <button
+            className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="max-h-[65vh] space-y-4 overflow-y-auto p-5">
+          {loading && <p className="text-sm text-slate-500">Loading the generated email…</p>}
+          {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+
+          {run && (
+            <>
+              <div className="flex flex-wrap items-center gap-2">
+                <span
+                  className={
+                    run.is_valid
+                      ? "inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700"
+                      : "inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800"
+                  }
+                >
+                  {run.is_valid ? "Passed all gates" : "Failed a gate"}
+                </span>
+                {run.campaign_output?.campaign_line && (
+                  <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
+                    🎯 {run.campaign_output.campaign_line}
+                  </span>
+                )}
+                {run.coverage && (
+                  <span className="text-[11px] text-slate-400">coverage {run.coverage}</span>
+                )}
+                <a
+                  href={`/generation?run=${run.id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="ml-auto text-xs font-medium text-blue-600 hover:underline"
+                >
+                  Open in Generation ↗
+                </a>
+              </div>
+
+              <article className="overflow-hidden rounded-xl border border-slate-200">
+                <div className="space-y-1 border-b border-slate-100 bg-slate-50 px-4 py-3 text-left">
+                  <p className="text-xs text-slate-500">
+                    To <span className="font-medium text-slate-700">{run.person_name || contact.name}</span>
+                    {run.person_email ? ` <${run.person_email}>` : ""}
+                  </p>
+                  <p className="text-base font-semibold text-slate-900">{run.subject || "(no subject)"}</p>
+                </div>
+                <div className="whitespace-pre-wrap px-4 py-4 text-left text-sm leading-relaxed text-slate-800">
+                  {run.body || "(no body)"}
+                </div>
+              </article>
+
+              {(run.warnings || []).length > 0 && (
+                <ul className="space-y-1 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  {run.warnings.map((w, i) => (
+                    <li key={i}>⚠ {w}</li>
+                  ))}
+                </ul>
+              )}
+
+              {failedGates.length > 0 && (
+                <ul className="space-y-1 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
+                  {failedGates.map(([name, g]) => (
+                    <li key={name}>
+                      <span className="font-semibold">{name}</span>
+                      {g?.detail ? ` — ${g.detail}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <div ref={sequenceRef} className="scroll-mt-2">
+                <div className="flex items-center justify-between">
+                  <p className={labelCls}>Follow-up sequence</p>
+                  {followups.length > 0 && (
+                    <button className={btnGhostSm} onClick={() => onFollowup(true)} disabled={Boolean(busy)}>
+                      ↻ Regenerate
+                    </button>
+                  )}
+                </div>
+                {followups.length === 0 ? (
+                  <p className="rounded-lg border border-dashed border-slate-300 px-3 py-3 text-xs text-slate-400">
+                    No follow-ups yet. Step 1 (+3 days) adds one new specific and makes the ask smaller; step 2
+                    (+7 days) is the shortest and easiest to decline.
+                  </p>
+                ) : (
+                  <ol className="space-y-2">
+                    {followups.map((f) => (
+                      <li key={f.id} className="rounded-lg border border-slate-200 px-4 py-3 text-left">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
+                            Step {f.step_number} · +{f.send_after_days ?? "?"} days
+                          </span>
+                          <span
+                            className={
+                              f.is_valid
+                                ? "inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700"
+                                : "inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800"
+                            }
+                          >
+                            {f.is_valid ? "Draft" : "Rejected"}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-sm font-semibold text-slate-900">{f.subject || "(no subject)"}</p>
+                        <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
+                          {f.body || "(no body)"}
+                        </p>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-5 py-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <button className={btnGhostSm} onClick={onRegenerate} disabled={Boolean(busy)}>
+              {busy === "generating" ? "✨ Writing…" : "✨ Regenerate"}
+            </button>
+            {followups.length === 0 && (
+              <button className={btnGhostSm} onClick={() => onFollowup(false)} disabled={Boolean(busy) || !run}>
+                {busy === "followup" ? "↪ Writing…" : "↪ Generate follow-ups"}
+              </button>
+            )}
+          </div>
+          <button className={btnPrimary} onClick={onSend} disabled={!run?.subject}>
+            Send this email
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

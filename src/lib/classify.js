@@ -1,6 +1,6 @@
 // The ONE place AI runs for replies: label an inbound reply so the engine knows
 // whether to stop, pause, or flag the contact. Everything the label triggers is
-// plain code (see src/lib/replies.js) — the model only classifies.
+// plain code (see worker/reply-scan.mjs) — the model only classifies.
 //
 // Provider-agnostic via src/lib/llm.js — uses OpenAI (OPENAI_API_KEY) or Claude
 // (ANTHROPIC_API_KEY), whichever is configured, with structured outputs. If no

@@ -163,6 +163,69 @@ export async function crawlInstitution(rawUrl) {
   return { documents, tried: seen.size };
 }
 
+// Hosts that serve an auth wall instead of content. LinkedIn is the one that
+// matters: the research API is handed a linkedin_url on nearly every request and
+// fetching it returns a login interstitial (or HTTP 999), never the profile. That
+// text would be worse than nothing — it is page furniture the extractor would try
+// to mine. So these are never fetched, and a fact about them can only ever come
+// from a search snippet, which is capped below the citation floor by the caller.
+const UNFETCHABLE_HOST = /(^|\.)(linkedin\.com|facebook\.com|instagram\.com|twitter\.com|x\.com|threads\.net|tiktok\.com)$/i;
+
+/** True when fetching this URL would return an auth wall rather than content. */
+export function isUnfetchable(rawUrl) {
+  try {
+    const u = new URL(/^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`);
+    return UNFETCHABLE_HOST.test(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Fetch an explicit list of URLs (search hits, caller-supplied `other_urls`).
+ *
+ * Unlike crawlInstitution() this discovers nothing and guesses nothing — it reads
+ * exactly what it is given, which is what RESEARCH_API_FEATURE.md's "do not guess
+ * URLs" rule requires of the person-research path.
+ *
+ * @param {Array<string|{url:string,kind?:string}>} urls
+ * @param {{limit?: number, kind?: string}} [opts]
+ * @returns {Promise<{documents: Array<{url,text,kind}>, skipped: Array<{url,reason}>}>}
+ */
+export async function crawlPages(urls, { limit = MAX_PAGES, kind = "page" } = {}) {
+  const documents = [];
+  const skipped = [];
+  const seen = new Set();
+
+  for (const entry of urls || []) {
+    if (documents.length >= limit) break;
+    const raw = typeof entry === "string" ? entry : entry?.url;
+    const entryKind = (typeof entry === "object" && entry?.kind) || kind;
+    if (!raw) continue;
+
+    let u;
+    try {
+      u = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    } catch {
+      skipped.push({ url: String(raw), reason: "invalid url" });
+      continue;
+    }
+    u.hash = "";
+    const key = u.href.replace(/\/$/, "");
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    if (!isPublicHttp(u)) { skipped.push({ url: u.href, reason: "host not allowed" }); continue; }
+    if (UNFETCHABLE_HOST.test(u.hostname)) { skipped.push({ url: u.href, reason: "auth wall (not fetchable)" }); continue; }
+
+    const page = await fetchPage(u.href);
+    if (page.error) { skipped.push({ url: u.href, reason: page.error }); continue; }
+    documents.push({ url: page.url, text: page.text, kind: entryKind });
+  }
+
+  return { documents, skipped };
+}
+
 /** Render crawled documents as a labelled, citable block for the extractor. */
 export function documentsToSourceMaterial(documents) {
   return documents
