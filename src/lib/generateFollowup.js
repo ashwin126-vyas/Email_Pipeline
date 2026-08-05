@@ -23,6 +23,7 @@
 
 import { chatJSON, aiProvider } from "./llm.js";
 import { BANNED, BANNED_PATTERNS, B2B_LANGUAGE, norm, overlap } from "./generatePersonEmail.js";
+import { senderBlock, signatureProblem } from "./sender.js";
 
 export const FOLLOWUP_PROMPT_VERSION = "followup-v1-2026-07";
 
@@ -46,11 +47,27 @@ something that costs them almost nothing, like forwarding a link to one batch.`,
     send_after_days: 7,
     max_words: 110,
     min_words: 70,
-    goal: "Final, short, easy to decline. Close the loop without guilt.",
-    angle_guidance: `This is the last email in the sequence and it must read that way — calm, brief,
-and genuinely easy to say no to. Give them an explicit way out ("if this is not
-useful, say so and I will leave it there"). Do not re-explain the product. Do not
-list capabilities. Do not ask a second question. Between 70 and 110 words, and still shorter than both previous emails.`,
+    goal: "Short, easy to decline. Narrow the ask to one concrete thing.",
+    angle_guidance: `Calm, brief, and genuinely easy to say no to. Give them an explicit way out
+("if this is not useful, say so and I will leave it there"). Do not re-explain
+the product. Do not list capabilities. Do not ask a second question. Between 70
+and 110 words, and still shorter than both previous emails.`,
+  },
+  // The sign-off. Only reached when someone asks for a third follow-up — the
+  // default sequence is two, and step 2 already closes politely. Its band sits
+  // below step 2's floor on purpose: shorter_than_previous measures against the
+  // SHORTEST email in the thread, so a third step sharing step 2's 70-word floor
+  // would need to be both ≥70 and <70-ish, and no wording can satisfy that.
+  3: {
+    send_after_days: 14,
+    max_words: 70,
+    min_words: 35,
+    goal: "Close the thread. One line of value, an explicit door left open, nothing asked.",
+    angle_guidance: `This is the last email and it must read that way. Say the useful thing once, in a
+single sentence. Then close the loop explicitly — make clear you will not write
+again and that they can come back whenever it is relevant. Do NOT ask a question,
+do NOT restate capabilities, do NOT add a new offer. Under 70 words. Shorter than
+every previous email in the thread.`,
   },
 };
 
@@ -122,6 +139,8 @@ RULES
    deployment, ROI, enterprise, vendor).
 8. No pricing. The product publishes no prices, so you do not know any. Never
    write a figure with a currency, a discount or a fee.
+8b. SIGN OFF with exactly the two lines in sender.sign_off_exactly — name then
+   title. NEVER a bracketed placeholder like [Your Name].
 9. One ask, at the end. Never two questions.
 10. No em-dashes. No exclamation marks. No filler openers ("I hope this email
    finds you well", "I am reaching out"). No generic praise ("commitment to
@@ -143,6 +162,9 @@ export function buildFollowupContract({ step, original, previous = [], product, 
   const cfg = FOLLOWUP_STEPS[step] || FOLLOWUP_STEPS[1];
   const contract = {
     step,
+    // Same signature as the first email — the thread is from one person, and a
+    // follow-up signed differently reads as a different sender.
+    sender: senderBlock(),
     goal: cfg.goal,
     max_words: cfg.max_words,
     // The floor must yield to shorter_than_previous, or the two gates contradict
@@ -230,6 +252,11 @@ export function validateFollowup({ subject, body, newSpecific, contract }) {
       .replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/+$/, "");
     add("product_link_present", bare(text).includes(bare(productUrl)), `body must contain ${productUrl}`);
   }
+
+  // 1a2. signature_real — same rule as the first email. A thread that signs off
+  //      "[Your Name]" on step 3 undoes every specific fact above it.
+  const sigProblem = signatureProblem(body);
+  add("signature_real", !sigProblem, sigProblem);
 
   // 1b. min_words — a follow-up shrinking to one line stops being an email and
   //     becomes a nudge, which is what the no-guilt rule already forbids.

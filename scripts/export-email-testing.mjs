@@ -2,6 +2,8 @@
 //
 //   npm run export:testing                      # ids 25-34 (the current B2C batch)
 //   npm run export:testing -- --ids=25,26,27
+//   npm run export:testing -- --thread=131   # one email + its follow-ups, shared stages once
+//   npm run export:testing -- --threads=142,150,160  # several threads, one document
 //   npm run export:testing -- --all
 //   npm run export:testing -- --out=/path/to/report.pdf
 //
@@ -17,6 +19,8 @@ import { dirname, resolve } from "node:path";
 
 const args = process.argv.slice(2);
 const idArg = args.find((a) => a.startsWith("--ids="));
+const threadArg = args.find((a) => a.startsWith("--thread="));
+const threadsArg = args.find((a) => a.startsWith("--threads="));
 const outArg = args.find((a) => a.startsWith("--out="));
 const all = args.includes("--all");
 
@@ -40,14 +44,45 @@ const { rows: columns } = await pool.query(
     ORDER BY ordinal_position`
 );
 
-const { rows } = await pool.query(
-  all
-    ? `SELECT * FROM email_testing ORDER BY id`
-    : ids
-    ? `SELECT * FROM email_testing WHERE id = ANY($1::int[]) ORDER BY id`
-    : `SELECT * FROM email_testing WHERE id BETWEEN 25 AND 34 ORDER BY id`,
-  all ? [] : ids ? [ids] : []
-);
+// --thread walks one chain of parent_id links from a root, so an initial email and
+// its follow-ups come back as ONE document instead of N near-identical ones.
+const threadRoot = threadArg ? Number(threadArg.slice(9)) : null;
+// --threads=142,150,160 puts several complete threads in ONE document, each with
+// its own shared-context block. Used for sample packs across universities.
+const threadRoots = threadsArg
+  ? threadsArg.slice(10).split(",").map((x) => Number(x.trim())).filter(Boolean)
+  : threadRoot ? [threadRoot] : null;
+
+// Only valid emails, and only the newest at each step. A rejected attempt is a
+// branch that was never sent, and three of them hanging off step 2 turned a
+// four-email thread into a seven-record document.
+const THREAD_SQL = `WITH RECURSIVE chain AS (
+     SELECT * FROM email_testing WHERE id = $1
+     UNION ALL
+     SELECT c.* FROM email_testing c JOIN chain ON c.parent_id = chain.id
+      WHERE c.is_valid
+   )
+   SELECT DISTINCT ON (step_number) * FROM chain
+    ORDER BY step_number, created_at DESC, id DESC`;
+
+const threads = [];
+if (threadRoots) {
+  for (const root of threadRoots) {
+    const { rows: t } = await pool.query(THREAD_SQL, [root]);
+    if (t.length) threads.push(t);
+  }
+}
+
+const rows = threadRoots
+  ? threads.flat()
+  : (await pool.query(
+      all
+        ? `SELECT * FROM email_testing ORDER BY id`
+        : ids
+        ? `SELECT * FROM email_testing WHERE id = ANY($1::int[]) ORDER BY id`
+        : `SELECT * FROM email_testing WHERE id BETWEEN 25 AND 34 ORDER BY id`,
+      all ? [] : ids ? [ids] : []
+    )).rows;
 
 if (!rows.length) {
   console.error("No matching rows in email_testing.");
@@ -122,7 +157,132 @@ const summaryRows = rows
   )
   .join("");
 
-const recordSections = rows
+// In thread mode the pipeline stages that produced the whole thread — research,
+// the product row, the campaign — are printed ONCE, because they are identical
+// for every step by construction: a follow-up reuses the cached research and the
+// org's campaign rather than redoing them. Repeating them per step made a
+// four-email thread a 111-page document that was 80% the same bytes.
+const SHARED_GROUPS = new Set([
+  "Identity and run metadata", "Linked rows (soft references)",
+  "Stage 1 — Research (them)", "Stage 2 — Radius (us)",
+  "Stage 3 — Campaign (per organisation)",
+]);
+const SHARED_ONLY_FIELDS = new Set([
+  "mode", "email_intent", "org_key", "org_name", "person_name", "person_email",
+  "provider", "model", "person_research_id", "org_research_id",
+  "radius_product_id", "radius_campaign_id",
+  "research_input", "research_output", "radius_input", "radius_output",
+  "campaign_cached", "campaign_input", "campaign_prompt_system",
+  "campaign_prompt_user", "campaign_output",
+]);
+
+const renderGroups = (r, keep) => GROUPS.map((g) => {
+  const fields = g.fields.filter((f) => f in r && keep(f, g));
+  if (!fields.length) return "";
+  const items = fields.map((f) => {
+    const col = columns.find((c) => c.column_name === f);
+    const size = chars(r[f]);
+    return `<div class="field">
+      <div class="fname">${esc(f)}
+        <span class="ftype">${esc(col?.data_type || "")}${size > 200 ? ` · ${size.toLocaleString()} chars` : ""}</span>
+      </div>
+      <div class="fval">${renderValue(r[f])}</div>
+    </div>`;
+  }).join("");
+  return `<section class="group"><h3>${esc(g.title)}</h3>${items}</section>`;
+}).join("");
+
+const threadSections = (trows, chapter = null) => {
+  const initial = trows.find((r) => (r.step_number || 1) === 1) || trows[0];
+  const followups = trows.filter((r) => r !== initial);
+  const emailBlock = (r, label) => `<article class="record">
+    <header class="rhead">
+      <div class="rid">email_testing · id ${r.id}${r.parent_id ? ` · follow-up to id ${r.parent_id}` : ""}</div>
+      <h2>${esc(label)}</h2>
+      <div class="rmeta">
+        <span>${esc(r.subject || "no subject")}</span>
+        <span>${String(r.body || "").trim().split(/\s+/).filter(Boolean).length} words</span>
+        <span class="${r.is_valid ? "ok" : "bad"}">${r.is_valid ? "valid draft" : "rejected"}</span>
+        <span>${esc(r.run_label || "")}</span>
+        <span>${r.created_at instanceof Date ? r.created_at.toISOString().slice(0, 19).replace("T", " ") : ""}</span>
+      </div>
+    </header>
+    ${renderGroups(r, (f) => !SHARED_ONLY_FIELDS.has(f))}
+  </article>`;
+
+  return `${chapter ? `<article class="record chapter"><header class="rhead">
+      <div class="rid">${chapter.personOnly ? "contact" : "sample"} ${chapter.n} of ${chapter.total}</div>
+      <h2>${esc(chapter.personOnly ? initial.person_name : initial.org_name)}</h2>
+      <div class="rmeta"><span>${esc(chapter.personOnly ? initial.org_name : initial.person_name)}</span>
+        <span>${esc(initial.person_email || "")}</span>
+        <span>coverage: <b>${esc(initial.coverage)}</b></span>
+        <span>${trows.length} emails</span></div></header></article>` : ""}
+  ${chapter?.personOnly ? "" : `<article class="record">
+    <header class="rhead">
+      <div class="rid">shared across all ${trows.length} emails in this thread</div>
+      <h2>${esc(initial.person_name)} <span class="at">at</span> ${esc(initial.org_name)}</h2>
+      <div class="rmeta">
+        <span>${esc(initial.person_email || "no email")}</span>
+        <span>coverage: <b>${esc(initial.coverage)}</b></span>
+        <span>tone: <b>${esc(initial.tone)}</b></span>
+        <span>${trows.length} emails · 1 initial + ${followups.length} follow-up${followups.length === 1 ? "" : "s"}</span>
+      </div>
+    </header>
+    <p class="lede">Research, the RadiusAI product row and the organisation campaign are shown once:
+    every email below was written from these same inputs. Only what changes per email — its own
+    prompt, contract, output and gates — is repeated in the sections that follow.</p>
+    ${renderGroups(initial, (f, g) => SHARED_GROUPS.has(g.title) && f !== "id" && f !== "run_label"
+        && f !== "created_at" && f !== "status" && f !== "is_valid" && f !== "error")}
+  </article>`}
+  <article class="record"><header class="rhead"><div class="rid">the email</div>
+    <h2>Email — step 1</h2></header></article>
+  ${emailBlock(initial, "Initial email")}
+  <article class="record"><header class="rhead"><div class="rid">the sequence</div>
+    <h2>Follow-up emails (${followups.length})</h2></header>
+    <p class="lede">Each follow-up is written against the full text of every email before it, which is
+    why <code>previous_subject</code> and <code>previous_body</code> differ at every step and the word
+    count falls monotonically.</p></article>
+  ${followups.map((r, i) => emailBlock(r, `Follow-up ${i + 1} — step ${r.step_number}, sent +${[3, 7, 14][i] ?? "?"} days`)).join("")}`;
+};
+
+// When every thread belongs to the SAME organisation, the research and campaign
+// are one row shared by all of them — that is the design ("one campaign per
+// university, one email per person"), so printing them per person would repeat
+// identical bytes and hide the very thing worth seeing. Emit them once, then just
+// the people.
+const oneOrg = threads.length > 1 &&
+  new Set(threads.map((t) => String(t[0].org_key || "").toLowerCase())).size === 1;
+
+const sharedOrgBlock = () => {
+  const r = threads[0][0];
+  const total = threads.reduce((n, t) => n + t.length, 0);
+  return `<article class="record">
+    <header class="rhead">
+      <div class="rid">shared by all ${threads.length} people · ${total} emails</div>
+      <h2>${esc(r.org_name)}</h2>
+      <div class="rmeta">
+        <span>${esc(r.org_key)}</span>
+        <span>coverage: <b>${esc(r.coverage)}</b></span>
+        <span>${threads.length} contacts</span>
+      </div>
+    </header>
+    <p class="lede">One organisation, researched once and given one campaign. Every email below was
+    written from these same inputs — what differs per person is their role, their contract and their
+    own thread. Researching this university three times would have produced the same paragraph three
+    times and three different pitches for one institution.</p>
+    ${renderGroups(r, (f, g) => SHARED_GROUPS.has(g.title) && f !== "id" && f !== "run_label"
+        && f !== "created_at" && f !== "status" && f !== "is_valid" && f !== "error"
+        && f !== "person_name" && f !== "person_email")}
+  </article>`;
+};
+
+const recordSections = threadRoots
+  ? (oneOrg
+      ? sharedOrgBlock() + threads.map((t, i) =>
+          threadSections(t, { n: i + 1, total: threads.length, personOnly: true })).join("")
+      : threads.map((t, i) =>
+          threadSections(t, threads.length > 1 ? { n: i + 1, total: threads.length } : null)).join(""))
+  : rows
   .map((r) => {
     const groups = GROUPS.map((g) => {
       const fields = g.fields.filter((f) => f in r);
@@ -170,6 +330,11 @@ const html = `<!doctype html>
   h2 { font-size: 13pt; margin: 2px 0 6px; }
   h3 { font-size: 9.5pt; text-transform: uppercase; letter-spacing: 0.8px; color: #5a6472;
        margin: 14px 0 6px; padding-bottom: 3px; border-bottom: 1px solid #d8dde5; }
+  .chapter { page-break-before: always; background: #16181d; color: #fff; }
+  .chapter .rid, .chapter .rmeta, .chapter .rmeta b { color: #c9d1dc; }
+  .chapter h2 { color: #fff; font-size: 17pt; }
+  .lede { font-size: 9.5pt; color: #3c4553; background: #f7f9fc; border-left: 3px solid #c9d1dc;
+          padding: 8px 11px; margin: 8px 0 4px; }
   .cover { padding: 30mm 0 10mm; border-bottom: 3px solid #16181d; margin-bottom: 12px; }
   .sub { color: #5a6472; font-size: 10.5pt; margin: 2px 0; }
   .facts { margin-top: 14px; font-size: 9.5pt; color: #3c4553; }

@@ -12,6 +12,7 @@
 // "ranked 3rd in India" and the person whose job that ranking is.
 
 import { chatJSON, aiProvider } from "./llm.js";
+import { senderBlock, signature, signatureProblem } from "./sender.js";
 import { CITATION_FLOOR } from "./researchPerson.js";
 
 // LOCKED 2026-08-03 — the configuration that produced the approved email
@@ -177,6 +178,11 @@ function systemPrompt({ mode, tone, maxWords, minWords, thin }) {
    that describes a tool without saying where to find it makes the reader go and
    search for it, and most will not. Do not shorten it, wrap it in markdown, or add
    a tracking parameter: write it exactly as the contract gives it.
+9c. SIGN OFF with exactly the two lines in sender.sign_off_exactly — the sender's
+   name then their title, after your closing line ("Kind regards," or similar).
+   NEVER write a bracketed placeholder such as [Your Name], [Your Position] or
+   [Your Contact Information]. You know who is writing; it is in the contract.
+
 10. When a "product" block is present, describe it using ONLY the capabilities it
    lists. Read "proof_available": if it says NONE, you have no statistics, no
    customers and no testimonials, and inventing one is the worst failure available
@@ -253,8 +259,13 @@ export function buildEmailContract({ research, mode, emailIntent, senderContext,
     allowed_facts: allowed,
     coverage: research?.meta?.coverage || "thin",
   };
+  // Who is writing. Present in every mode — without it the model signs off with a
+  // bracketed placeholder, which is the single clearest tell that nobody read the
+  // email before it was sent.
+  contract.sender = senderBlock(senderContext);
   if (mode === "on_behalf") {
     contract.sender = {
+      ...contract.sender,
       description: senderContext || "",
       name: research?.person?.full_name || "",
       title: research?.person?.current_title || "",
@@ -356,6 +367,12 @@ export function validatePersonEmail({ subject, body, hooksUsed = [], factsCited 
       .replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/+$/, "");
     add("product_link_present", bare(text).includes(bare(productUrl)), `body must contain ${productUrl}`);
   }
+
+  // 0b2. signature_real — a bracketed placeholder proves the email was generated
+  //      and never read. Fail closed: this one is embarrassing in a way a clumsy
+  //      sentence is not, and it is trivially checkable in code.
+  const sigProblem = signatureProblem(body);
+  add("signature_real", !sigProblem, sigProblem);
 
   // 0c. min_words — skipped on thin coverage, where short and honest is correct
   //     and padding produces exactly the fake-personal email we avoid.

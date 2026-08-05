@@ -249,7 +249,7 @@ test("raising min_confidence shrinks what the email is allowed to know", () => {
 
 const good = {
   subject: "your new AI centre",
-  body: "Dear Professor Rao,\n\nYour department opened a new AI centre in March, and it changes what a cohort of that size can attempt. The department runs a 900 student cohort, which is where the work usually stalls. Would you be open to a short call next week?\n\nBest,\nSam",
+  body: "Dear Professor Rao,\n\nYour department opened a new AI centre in March, and it changes what a cohort of that size can attempt. The department runs a 900 student cohort, which is where the work usually stalls. Would you be open to a short call next week?\n\nBest,\nSam\n\nKind regards,\nAryan Shivahare\nFounder & CEO, RadiusAI",
   hooksUsed: ["Opened a new AI centre in March"],
   factsCited: [
     { fact: "The department opened a new AI centre in March.", source_url: FETCHED },
@@ -261,6 +261,18 @@ const good = {
 test("a well-formed email passes every gate", () => {
   const v = validatePersonEmail(good);
   assert.equal(v.valid, true, `failed: ${v.failed.join(", ")}`);
+});
+
+test("signature_real rejects a bracketed placeholder — the clearest tell of an unread email", () => {
+  for (const bad of ["[Your Name]", "[Your Position]", "<name>", "{{sender}}"]) {
+    const v = validatePersonEmail({ ...good, body: `${good.body}\n${bad}` });
+    assert.equal(v.gates.signature_real.pass, false, `accepted ${bad}`);
+  }
+});
+
+test("signature_real rejects an email that does not sign off as the sender", () => {
+  const v = validatePersonEmail({ ...good, body: good.body.replace(/Aryan Shivahare/g, "Someone Else") });
+  assert.equal(v.gates.signature_real.pass, false);
 });
 
 test("no_orphan_numbers catches a fabricated statistic", () => {
@@ -595,7 +607,7 @@ const fContract = (step = 1, extra = {}) => ({
 
 const goodF = {
   subject: "one link for your final year batch",
-  body: "Dear Ms Kaushal,\n\nThe application tracker is the part students tell us they miss most. It keeps every deadline in one place so nothing slips during drive season. Could you forward the link to one batch?\n\nBest,\nA",
+  body: "Dear Ms Kaushal,\n\nThe application tracker is the part students tell us they miss most. It keeps every deadline in one place so nothing slips during drive season. Could you forward the link to one batch?\n\nBest,\nAryan Shivahare\nFounder & CEO, RadiusAI",
   newSpecific: "the application tracker keeps every deadline in one place",
   contract: fContract(1),
 };
