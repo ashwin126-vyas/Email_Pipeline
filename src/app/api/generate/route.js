@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 // Body: { productPitch, targetDescription?, tone?, steps?, senderName? }
 // Returns { steps: [{subject, body}] } — DRAFTS only. Nothing is saved; the UI
 // shows them for review/edit, then a separate "approve" step turns them into
-// templates + a sequence. Requires ANTHROPIC_API_KEY (see .env.example).
+// templates + a sequence. Requires OPENAI_API_KEY (see .env.example).
 export async function POST(req) {
   let body;
   try {

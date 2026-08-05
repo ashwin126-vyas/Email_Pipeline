@@ -12,7 +12,7 @@ import { pool } from "./db.js";
 import { generateFollowup, FOLLOWUP_STEPS } from "./generateFollowup.js";
 import { currentRadiusProduct, productBlock } from "./radiusProduct.js";
 import { currentCampaignForOrg, campaignBlock } from "./generateCampaign.js";
-import { aiProvider } from "./llm.js";
+import { aiProvider, aiModel } from "./llm.js";
 
 export function followupHint(e) {
   return /relation .*followup_testing.* does not exist/i.test(e.message)
@@ -73,7 +73,7 @@ async function saveFollowup({ original, step, result }) {
       Boolean(result?.validation?.valid),
       JSON.stringify(result?.validation?.gates || {}),
       result?.error ? "failed" : result?.validation?.valid ? "draft" : "rejected",
-      aiProvider(), process.env.OPENAI_GEN_MODEL || process.env.ANTHROPIC_GEN_MODEL || null,
+      aiProvider(), aiModel("gen"),
       result?.error || null,
     ]
   );

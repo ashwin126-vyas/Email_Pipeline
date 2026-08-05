@@ -33,7 +33,8 @@ export const FOLLOWUP_PROMPT_VERSION = "followup-v1-2026-07";
 export const FOLLOWUP_STEPS = {
   1: {
     send_after_days: 3,
-    max_words: 110,
+    max_words: 150,
+    min_words: 100,
     goal: "Add one specific they did not get the first time, and make the ask smaller.",
     angle_guidance: `Open on something concrete about THEIR students or THEIR institution, not on
 the previous email. Add exactly ONE new specific: a capability from the product
@@ -43,13 +44,13 @@ something that costs them almost nothing, like forwarding a link to one batch.`,
   },
   2: {
     send_after_days: 7,
-    max_words: 70,
+    max_words: 110,
+    min_words: 70,
     goal: "Final, short, easy to decline. Close the loop without guilt.",
     angle_guidance: `This is the last email in the sequence and it must read that way — calm, brief,
 and genuinely easy to say no to. Give them an explicit way out ("if this is not
 useful, say so and I will leave it there"). Do not re-explain the product. Do not
-list capabilities. Do not ask a second question. Under ${70} words, and shorter
-than both previous emails.`,
+list capabilities. Do not ask a second question. Between 70 and 110 words, and still shorter than both previous emails.`,
   },
 };
 
@@ -85,7 +86,8 @@ const FOLLOWUP_SCHEMA = {
   additionalProperties: false,
 };
 
-function systemPrompt({ step, tone, maxWords }) {
+function systemPrompt({ step, tone, maxWords, minWords }) {
+  const contractWords = minWords ? `write ${minWords} to ${maxWords} words` : `stay under ${maxWords} words`;
   const cfg = FOLLOWUP_STEPS[step] || FOLLOWUP_STEPS[1];
   return `You write follow-up email number ${step} in a short sequence. The recipient
 already received the previous email(s) shown to you and did NOT reply. They are
@@ -143,6 +145,19 @@ export function buildFollowupContract({ step, original, previous = [], product, 
     step,
     goal: cfg.goal,
     max_words: cfg.max_words,
+    // The floor must yield to shorter_than_previous, or the two gates contradict
+    // each other whenever the thread starts short: a 90-word first email makes
+    // "at least 100 words AND shorter than 90" unsatisfiable, and every follow-up
+    // fails no matter what the model writes. So the configured floor is a target,
+    // capped by what the thread actually leaves room for.
+    min_words: (() => {
+      const prevLens = [original?.body, ...previous.map((x) => x.body)]
+        .map((b) => String(b || "").trim().split(/\s+/).filter(Boolean).length)
+        .filter((n) => n > 0);
+      if (!prevLens.length) return cfg.min_words;
+      const headroom = Math.min(...prevLens) - 15;
+      return Math.max(25, Math.min(cfg.min_words, headroom));
+    })(),
     send_after_days: cfg.send_after_days,
     tone: original?.tone || "formal",
     recipient: {
@@ -205,6 +220,21 @@ export function validateFollowup({ subject, body, newSpecific, contract }) {
   // 1. max_words — a follow-up that is as long as the first email is a re-pitch.
   add("max_words", bodyWords.length <= (contract?.max_words || 110),
     `${bodyWords.length}/${contract?.max_words || 110} words`);
+
+  // 1a. product_link_present — the rule was in the prompt but not gated here, and
+  //     a follow-up promptly wrote "sharing RadiusAI's link" with no URL in it.
+  //     A prompt is a request; this is the rule.
+  const productUrl = contract?.product?.url;
+  if (productUrl) {
+    const bare = (u) => String(u).trim().toLowerCase()
+      .replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/+$/, "");
+    add("product_link_present", bare(text).includes(bare(productUrl)), `body must contain ${productUrl}`);
+  }
+
+  // 1b. min_words — a follow-up shrinking to one line stops being an email and
+  //     becomes a nudge, which is what the no-guilt rule already forbids.
+  const minW = Number(contract?.min_words) || 0;
+  if (minW) add("min_words", bodyWords.length >= minW, `${bodyWords.length}/${minW} words minimum`);
 
   // 2. shorter_than_previous — attention goes down across a sequence, so length
   //    must too. Compared against the SHORTEST previous step, not the last one.
@@ -291,7 +321,7 @@ export function validateFollowup({ subject, body, newSpecific, contract }) {
  */
 export async function generateFollowup({ step, original, previous = [], product, campaign, research, attempts = 2 }) {
   const contract = buildFollowupContract({ step, original, previous, product, campaign, research });
-  const system = systemPrompt({ step, tone: contract.tone, maxWords: contract.max_words });
+  const system = systemPrompt({ step, tone: contract.tone, maxWords: contract.max_words, minWords: contract.min_words });
   const baseUser = `CONTRACT\n${JSON.stringify(contract, null, 2)}`;
   let user = baseUser;
   let last = null;

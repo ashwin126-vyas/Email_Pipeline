@@ -4,7 +4,7 @@
 // Mechanism: poll the reply mailbox over IMAP for unseen messages, match the
 // sender against enrolled contacts, classify the reply with Claude, then act in
 // PLAIN CODE. Entirely env-gated: with no IMAP_* configured this is dormant and
-// the worker just skips it. With IMAP but no ANTHROPIC_API_KEY it degrades to
+// the worker just skips it. With IMAP but no OPENAI_API_KEY it degrades to
 // the v1 rule "any reply -> stop".
 //
 // Env:

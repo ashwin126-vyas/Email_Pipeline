@@ -12,6 +12,79 @@
 // which is the documented degraded mode, not an error.
 
 const PROVIDERS = {
+  // Defaults to gpt-4o-mini deliberately. OpenAI bills non-preview web_search on
+  // the mini models as a FIXED 8,000-token input block per call regardless of how
+  // much page content is read; every other model is billed for the lot. Measured:
+  // ₹1.12 per call on gpt-4o-mini against ₹21.35 on gpt-5.6 — an 18x difference
+  // that is invisible unless you look for it.
+  //
+  // OpenAI's built-in web_search tool. Not Google — it is OpenAI's own search —
+  // but this layer only has to DISCOVER urls; researchCrawl then fetches and reads
+  // them, so the discovery engine matters less than the coverage. Uses the same
+  // OPENAI_API_KEY as generation, which means no second vendor and no second bill.
+  openai: {
+    key: () => process.env.OPENAI_API_KEY,
+    async run(query, count) {
+      const model = process.env.OPENAI_SEARCH_MODEL || "gpt-4o-mini";
+      const res = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          tools: [{ type: "web_search" }],
+          tool_choice: "required",
+          input: `Search the web for: ${query}. Report what you find with sources.`,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error?.message || `OpenAI search HTTP ${res.status}`);
+
+      // Record what the search actually consumed. This was NOT instrumented when
+      // the provider was added, and it turned out to be the single most expensive
+      // component in the pipeline: web_search bills the $10/1k call fee PLUS every
+      // token of fetched page content at the model's own rate, and the default
+      // model here is a premium one. Unmeasured cost is unmanaged cost.
+      const u = data?.usage || {};
+      searchTokenLedger.push({
+        model,
+        input: u.input_tokens ?? u.prompt_tokens ?? 0,
+        output: u.output_tokens ?? u.completion_tokens ?? 0,
+        calls: 1,
+      });
+
+      // `sources` is the full list of URLs consulted and is usually larger than the
+      // set actually cited — which is what we want, since the crawler decides what
+      // is worth reading.
+      const seen = new Set();
+      const hits = [];
+      // OpenAI appends ?utm_source=openai to every URL. Left in, the same page
+      // reached two different ways looks like two sources — which is precisely
+      // what corroboration must not be fooled by.
+      const clean = (u) => {
+        try {
+          const x = new URL(u);
+          for (const k of [...x.searchParams.keys()]) if (/^utm_/i.test(k)) x.searchParams.delete(k);
+          return x.toString().replace(/\?$/, "");
+        } catch { return u; }
+      };
+      const push = (rawUrl, title, snippet) => {
+        const url = clean(rawUrl);
+        if (!url || seen.has(url)) return;
+        seen.add(url);
+        hits.push({ title: title || "", url, snippet: snippet || "" });
+      };
+      for (const item of data.output || []) {
+        for (const src of item.sources || []) push(src.url, src.title, src.snippet);
+        for (const c of item.content || []) {
+          for (const a of c.annotations || []) push(a.url, a.title, "");
+        }
+      }
+      return hits.slice(0, count);
+    },
+  },
   serper: {
     key: () => process.env.SERPER_API_KEY,
     async run(query, count, key) {
@@ -54,7 +127,20 @@ const PROVIDERS = {
   },
 };
 
-const ORDER = ["serper", "brave", "tavily"];
+// Serper first when present (real Google). Otherwise OpenAI's own web search,
+// which needs no new vendor because the key is already here for generation.
+// Search usage is tracked separately from generation: the model, the rates and
+// the failure modes are all different.
+export const searchTokenLedger = [];
+export function searchUsageTotals() {
+  return searchTokenLedger.reduce(
+    (t, e) => ({ calls: t.calls + 1, input: t.input + e.input, output: t.output + e.output, model: e.model }),
+    { calls: 0, input: 0, output: 0, model: null }
+  );
+}
+export function resetSearchUsage() { searchTokenLedger.length = 0; }
+
+const ORDER = ["serper", "brave", "tavily", "openai"];
 
 /** Which provider will run, or null when no search key is configured. */
 export function searchProvider() {

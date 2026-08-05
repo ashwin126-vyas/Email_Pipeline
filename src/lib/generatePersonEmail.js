@@ -14,9 +14,18 @@
 import { chatJSON, aiProvider } from "./llm.js";
 import { CITATION_FLOOR } from "./researchPerson.js";
 
-export const PROMPT_VERSION = "person-v1-2026-07";
+// LOCKED 2026-08-03 — the configuration that produced the approved email
+// (email_testing id 85): 180-250 words with a gated floor, formal register,
+// product URL required, human-verified facts preferred. Bump this version if any
+// of those change, so a stored run can be traced back to the prompt that made it.
+export const PROMPT_VERSION = "person-v3-2026-08-locked";
 
-const DEFAULT_MAX_WORDS = 150;
+const DEFAULT_MAX_WORDS = 250;
+// A ceiling alone does not lengthen anything: against a 150-word cap the model
+// settled around 115 every time, because "stay under N" is satisfied by any short
+// answer. Length needs a floor, a target range, and a gate — otherwise it is just
+// another sentence in a prompt.
+const DEFAULT_MIN_WORDS = 180;
 const TONES = ["formal", "peer", "warm"];
 
 // The spec's rule 5 is "no filler openers", and the expensive part of enforcing it
@@ -58,6 +67,13 @@ export const BANNED_PATTERNS = [
   { re: /\b(impressive|remarkable|outstanding)\s+(achievements|accomplishments|track record)\b/i, label: "generic praise (impressive achievements)" },
   { re: /\bi\s+(am|'m)\s+(writing|reaching)\s+to\s+you\b/i, label: "filler opener (I am writing to you)" },
   { re: /\bas\s+you\s+may\s+(know|be\s+aware)\b/i, label: "filler (as you may know)" },
+  // Connective filler from real output: each joins two clauses while adding
+  // nothing, and together they are what makes a correct email read flat.
+  { re: /\bis\s+(indeed\s+)?(commendable|praiseworthy|noteworthy|laudable)\b/i, label: "empty praise (is commendable)" },
+  { re: /\baligns?\s+(perfectly|well|closely|seamlessly)\s+with\b/i, label: "filler connective (aligns perfectly with)" },
+  { re: /\bresonat(es?|ing)\s+(well|strongly|deeply)\s+with\b/i, label: "filler connective (resonates well with)" },
+  { re: /\bplays?\s+a\s+(vital|key|crucial|pivotal)\s+role\b/i, label: "cliche (plays a vital role)" },
+  { re: /\bi\s+would\s+be\s+(pleased|delighted|happy|glad)\s+to\b/i, label: "throat-clearing (I would be delighted to)" },
 ];
 
 // Enterprise/procurement language. The product is B2C — students are the
@@ -118,13 +134,20 @@ const TONE_GUIDE = {
   warm: "Warm and plain. Friendly without being familiar. Still specific.",
 };
 
-function systemPrompt({ mode, tone, maxWords, thin }) {
+function systemPrompt({ mode, tone, maxWords, minWords, thin }) {
   const shared = `RULES
-1. Stay under ${maxWords} words in the body. Count them.
+1. LENGTH: write ${minWords} to ${maxWords} words in the body, and count them. Aim for
+   the middle of the range. Under ${minWords} is a failure — a placement officer who
+   reads four sentences has learned nothing they can act on. Do not pad to reach
+   it: earn the length with specifics, never with restatement.
 2. Cite ONLY facts listed in allowed_facts. You may not introduce any number,
    percentage, ranking, date, employer, award or shared history that is not there.
    If you want a detail and do not have it, write the sentence without it.
 3. Use at most the hooks in top_hooks, verbatim in meaning. Never invent a hook.
+2b. Facts flagged verified_by_human were supplied deliberately by the sender
+   because they want them used. Prefer them over the crawled facts when both
+   would fit, and cite at least one when the email has room. They are not
+   optional colour: someone put them there on purpose.
 4. No filler openers and no announcing yourself. Banned outright: "I hope this
    email finds you well", "I am reaching out", "I wanted to reach out", "allow me
    to introduce". Say the thing instead of saying you are about to say it.
@@ -137,6 +160,10 @@ function systemPrompt({ mode, tone, maxWords, thin }) {
    present, yours must be clearly different from every one of them — other people
    at this same institution already received those. Take a different angle from
    campaign.subject_angles.
+8a. The subject must NOT contain the recipient's name. "Smrita Dwivedi manages
+   placements for 450 companies" reads as a line lifted from a scraped database,
+   because that is exactly what it looks like. Write about the topic, not the
+   person.
 8b. The subject addresses the RECIPIENT, who is a placement officer, NOT a student.
    Never write "your CV", "your career", "your job hunt", "your applications" or
    "your future" to them — they are not the one applying for jobs. Say "your
@@ -145,6 +172,11 @@ function systemPrompt({ mode, tone, maxWords, thin }) {
    facts_cited must copy the allowed_facts entries you actually referenced. Both
    are checked against your body by code. Listing something you did not use, or
    using something you did not list, fails validation.
+9b. LINK. When product.url is present, include that URL exactly once, verbatim, on
+   its own line beside the ask. It is how the reader reaches the product — an email
+   that describes a tool without saying where to find it makes the reader go and
+   search for it, and most will not. Do not shorten it, wrap it in markdown, or add
+   a tracking parameter: write it exactly as the contract gives it.
 10. When a "product" block is present, describe it using ONLY the capabilities it
    lists. Read "proof_available": if it says NONE, you have no statistics, no
    customers and no testimonials, and inventing one is the worst failure available
@@ -200,7 +232,7 @@ ${shared}`;
  * The contract handed to the model: only what cleared the floor. Exported so a
  * caller can inspect exactly what the email was allowed to know.
  */
-export function buildEmailContract({ research, mode, emailIntent, senderContext, minConfidence, tone, maxWords, product, campaign, recentSubjects }) {
+export function buildEmailContract({ research, mode, emailIntent, senderContext, minConfidence, tone, maxWords, minWords, product, campaign, recentSubjects, role }) {
   const allowed = (research?.provenance || [])
     .filter((p) => p?.fact && Number(p.confidence) >= minConfidence)
     .map((p) => ({ fact: p.fact, source_url: p.source_url || null }));
@@ -208,6 +240,7 @@ export function buildEmailContract({ research, mode, emailIntent, senderContext,
   const syn = research?.synthesis || {};
   const contract = {
     mode,
+    min_words: minWords,
     email_intent: emailIntent || "",
     recipient: mode === "on_behalf" ? compactTarget(research) : compactPerson(research),
     organisation: compactOrg(research),
@@ -231,6 +264,10 @@ export function buildEmailContract({ research, mode, emailIntent, senderContext,
 
   // What WE are, and the org-level campaign this person's email sits under. Both
   // optional: /generate-email is still usable with research alone.
+  if (research?.university?.placement) contract.placement = research.university.placement;
+  // What this ROLE is trying to achieve, researched once and cached. Replaces the
+  // per-person research that used to return almost nothing for these contacts.
+  if (role) contract.role = role;
   if (product) {
     contract.product = product;
     // Said explicitly rather than left as an empty array to be noticed. An absent
@@ -309,6 +346,44 @@ export function validatePersonEmail({ subject, body, hooksUsed = [], factsCited 
   const words = text.trim().split(/\s+/).filter(Boolean);
   const allowedFacts = contract?.allowed_facts || [];
   const topHooks = contract?.top_hooks || [];
+
+  // 0b. product_link_present — a prompt is a request; this is the rule. Compared
+  //     with protocol, "www." and trailing slash stripped, so any reasonable
+  //     rendering counts and only a genuinely missing link fails.
+  const productUrl = contract?.product?.url;
+  if (productUrl) {
+    const bare = (u) => String(u).trim().toLowerCase()
+      .replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/+$/, "");
+    add("product_link_present", bare(text).includes(bare(productUrl)), `body must contain ${productUrl}`);
+  }
+
+  // 0c. min_words — skipped on thin coverage, where short and honest is correct
+  //     and padding produces exactly the fake-personal email we avoid.
+  const minW = Number(contract?.min_words) || 0;
+  if (minW && !thin) add("min_words", words.length >= minW, `${words.length}/${minW} words minimum`);
+
+  // 0d. subject_not_personalised — a subject carrying the recipient's own name is
+  //     the clearest "you are a row in someone's spreadsheet" signal there is.
+  const rName = String(contract?.recipient?.name || "").trim();
+  if (rName) {
+    const parts = rName.split(/\s+/).filter((w) => w.length > 2);
+    const subjNorm = norm(subject);
+    const hit = parts.filter((w) => subjNorm.includes(norm(w)));
+    add("subject_not_personalised", hit.length < Math.max(1, parts.length),
+      hit.length ? `subject contains the recipient's name: ${hit.join(" ")}` : null);
+  }
+
+  // 0e. no_roadmap_claims — the product data marks some features as roadmap-only.
+  //     Describing one as available is the same failure class as inventing a
+  //     statistic: a claim the reader could act on that is not true yet.
+  const forbidden = contract?.product?.do_not_cite || [];
+  if (forbidden.length) {
+    const hits = forbidden.filter((f) => {
+      const key = String(f).toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 4).slice(0, 4);
+      return key.length >= 2 && key.every((w) => norm(text).includes(w));
+    });
+    add("no_roadmap_claims", hits.length === 0, hits.length ? `roadmap-only feature described as available: ${hits[0]}` : null);
+  }
 
   // 1. max_words — the spec's constraint, enforced rather than suggested.
   add("max_words", words.length <= contract.max_words, `${words.length}/${contract.max_words} words`);
@@ -433,9 +508,13 @@ export async function generatePersonEmail({
   product = null,
   campaign = null,
   recentSubjects = [],
+  role = null,
   attempts = 2,
 }) {
   const maxWords = Number.isFinite(Number(constraints.max_words)) ? Number(constraints.max_words) : DEFAULT_MAX_WORDS;
+  const minWords = Number.isFinite(Number(constraints.min_words))
+    ? Number(constraints.min_words)
+    : Math.min(DEFAULT_MIN_WORDS, Math.round(maxWords * 0.72));
   const minConfidence = Number.isFinite(Number(constraints.min_confidence))
     ? Number(constraints.min_confidence)
     : CITATION_FLOOR;
@@ -443,7 +522,7 @@ export async function generatePersonEmail({
   const tone = TONES.includes(override) ? override : (research?.synthesis?.recommended_tone || "formal");
 
   const contract = buildEmailContract({
-    research, mode, emailIntent, senderContext, minConfidence, tone, maxWords, product, campaign, recentSubjects,
+    research, mode, emailIntent, senderContext, minConfidence, tone, maxWords, minWords, product, campaign, recentSubjects, role,
   });
 
   const warnings = [];
@@ -462,7 +541,7 @@ export async function generatePersonEmail({
     warnings.push("no search provider configured, research used only the supplied URLs");
   }
 
-  const system = systemPrompt({ mode, tone, maxWords, thin });
+  const system = systemPrompt({ mode, tone, maxWords, minWords, thin });
   const basePrompt = `INPUT\n${JSON.stringify(contract, null, 2)}`;
   let userPrompt = basePrompt;
   let last = null;

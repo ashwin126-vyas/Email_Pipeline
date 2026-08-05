@@ -49,7 +49,7 @@ const arg = (args.find((a) => !a.startsWith("--") ) || "5").toLowerCase();
 const limit = arg === "all" ? 10000 : parseInt(arg, 10) || 5;
 
 if (!aiProvider()) {
-  console.error("No AI key set. Add OPENAI_API_KEY (or ANTHROPIC_API_KEY) to .env.");
+  console.error("No AI key set. Add OPENAI_API_KEY to .env.");
   process.exit(1);
 }
 if (!signatureReady()) {

@@ -9,7 +9,7 @@
 // contract it was built from, the content that came back, and how it scored on
 // the validation gates. Generating is free and reversible; sending is not.
 
-import { chatJSON, aiProvider } from "./llm.js";
+import { chatJSON, aiProvider, aiModel } from "./llm.js";
 import { buildContract } from "./derive.js";
 import { radiusBlock } from "./radiusBlock.js";
 import { validateEmail } from "./validateEmail.js";
@@ -212,7 +212,7 @@ export async function saveGeneration(pool, { meta, contract, prompts, result }) 
       result?.subject || null, result?.body || null, result?.factsCited || null,
       Boolean(val?.valid), JSON.stringify(val?.gates || {}),
       result?.error ? "failed" : val?.valid ? "draft" : "rejected",
-      aiProvider(), process.env.OPENAI_GEN_MODEL || process.env.ANTHROPIC_GEN_MODEL || null,
+      aiProvider(), aiModel("gen"),
       result?.error || null,
     ]
   );

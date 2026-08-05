@@ -1,31 +1,50 @@
-// Provider-agnostic "give me valid JSON in this schema" call. Uses OpenAI when
-// OPENAI_API_KEY is set, otherwise Anthropic (Claude) when ANTHROPIC_API_KEY is
-// set. Same { system, user, schema } in → { value } | { error } out, so the
-// callers (classify.js, generateSequence.js) don't care which provider runs.
+// "Give me valid JSON in this schema", via OpenAI.
 //
-// No SDK (matching src/lib/brevo.js): a raw fetch to each provider's API, using
-// each one's structured-output feature so the response is always valid JSON.
+// Anthropic support was removed on 2026-08-03. The project has only ever run on
+// OpenAI — every logged row in email_testing is provider=openai — the Anthropic
+// account had no API credit, and a second provider branch that nothing exercises
+// is a branch that silently rots. It is in git history if that changes.
 //
-// Model defaults per provider + task ("gen" = email writing, "classify" = reply
-// labeling), each overridable by env:
-//   OpenAI:    OPENAI_GEN_MODEL / OPENAI_MODEL        (default gpt-4o / gpt-4o-mini)
-//   Anthropic: ANTHROPIC_GEN_MODEL / ANTHROPIC_MODEL  (default Opus 4.8 / Haiku 4.5)
+// No SDK (matching src/lib/brevo.js): a raw fetch using OpenAI structured outputs,
+// so the response is always valid JSON.
+//
+// Models per task ("gen" = writing, "classify" = reply labelling), each
+// overridable by env:
+//   OPENAI_GEN_MODEL / OPENAI_MODEL   (default gpt-4o / gpt-4o-mini)
 
 const OPENAI_ENDPOINT = "https://api.openai.com/v1/chat/completions";
-const ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages";
 
 const OPENAI_DEFAULT = { gen: "gpt-4o", classify: "gpt-4o-mini" };
-const ANTHROPIC_DEFAULT = { gen: "claude-opus-4-8", classify: "claude-haiku-4-5-20251001" };
 
-// OpenAI takes precedence when both keys are present.
+// Every call's usage lands here so a caller can total the tokens for a whole
+// chain without threading a counter through six modules. Reset per run.
+let tokenLedger = [];
+export function resetTokenLedger() { tokenLedger = []; }
+export function tokenLedgerTotals() {
+  const t = { calls: 0, input: 0, output: 0, cached_input: 0, by_model: {} };
+  for (const e of tokenLedger) {
+    t.calls++; t.input += e.input; t.output += e.output; t.cached_input += e.cached_input || 0;
+    const m = (t.by_model[e.model] ||= { calls: 0, input: 0, output: 0 });
+    m.calls++; m.input += e.input; m.output += e.output;
+  }
+  return { ...t, calls_detail: tokenLedger.slice() };
+}
+
+/** "openai" when a key is present, else null. */
 export function aiProvider() {
-  if (process.env.OPENAI_API_KEY) return "openai";
-  if (process.env.ANTHROPIC_API_KEY) return "anthropic";
-  return null;
+  return process.env.OPENAI_API_KEY ? "openai" : null;
 }
 
 export function aiEnabled() {
   return aiProvider() !== null;
+}
+
+/** The model that will actually run, recorded on every email_testing row. */
+export function aiModel(kind = "gen") {
+  if (!aiProvider()) return null;
+  return kind === "gen"
+    ? process.env.OPENAI_GEN_MODEL || OPENAI_DEFAULT.gen
+    : process.env.OPENAI_MODEL || OPENAI_DEFAULT.classify;
 }
 
 /**
@@ -39,19 +58,14 @@ export function aiEnabled() {
  * @returns {Promise<{value?: any, error?: string}>}
  */
 export async function chatJSON({ system, user, schema, schemaName = "result", maxTokens = 4000, kind = "gen" }) {
-  const provider = aiProvider();
-  if (!provider) {
-    return { error: "No AI key set. Add OPENAI_API_KEY (or ANTHROPIC_API_KEY) to .env." };
+  if (!aiProvider()) {
+    return { error: "No AI key set. Add OPENAI_API_KEY to .env." };
   }
-  return provider === "openai"
-    ? openaiJSON({ system, user, schema, schemaName, maxTokens, kind })
-    : anthropicJSON({ system, user, schema, maxTokens, kind });
+  return openaiJSON({ system, user, schema, schemaName, maxTokens, kind });
 }
 
 async function openaiJSON({ system, user, schema, schemaName, maxTokens, kind }) {
-  const model = kind === "gen"
-    ? process.env.OPENAI_GEN_MODEL || OPENAI_DEFAULT.gen
-    : process.env.OPENAI_MODEL || OPENAI_DEFAULT.classify;
+  const model = aiModel(kind);
   try {
     const res = await fetch(OPENAI_ENDPOINT, {
       method: "POST",
@@ -75,9 +89,19 @@ async function openaiJSON({ system, user, schema, schemaName, maxTokens, kind })
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return { error: data?.error?.message || `OpenAI returned HTTP ${res.status}` };
+    // Record what this call actually cost before anything can throw.
+    const u = data?.usage || {};
+    tokenLedger.push({
+      model,
+      kind,
+      input: u.prompt_tokens || 0,
+      output: u.completion_tokens || 0,
+      cached_input: u.prompt_tokens_details?.cached_tokens || 0,
+    });
+
     const choice = data?.choices?.[0];
     if (choice?.message?.refusal) return { error: "The model declined this request. Try rephrasing." };
-    if (choice?.finish_reason === "length") return { error: "Output was truncated — try fewer steps." };
+    if (choice?.finish_reason === "length") return { error: "Output was truncated — raise maxTokens." };
     try {
       return { value: JSON.parse(choice?.message?.content || "") };
     } catch {
@@ -85,43 +109,5 @@ async function openaiJSON({ system, user, schema, schemaName, maxTokens, kind })
     }
   } catch (e) {
     return { error: e.message || "Network error calling OpenAI." };
-  }
-}
-
-async function anthropicJSON({ system, user, schema, maxTokens, kind }) {
-  const model = kind === "gen"
-    ? process.env.ANTHROPIC_GEN_MODEL || ANTHROPIC_DEFAULT.gen
-    : process.env.ANTHROPIC_MODEL || ANTHROPIC_DEFAULT.classify;
-  try {
-    const res = await fetch(ANTHROPIC_ENDPOINT, {
-      method: "POST",
-      headers: {
-        "x-api-key": process.env.ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: maxTokens,
-        system,
-        messages: [{ role: "user", content: user }],
-        output_config: { format: { type: "json_schema", schema } },
-      }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { error: data?.error?.message || `Anthropic returned HTTP ${res.status}` };
-    if (data.stop_reason === "refusal") return { error: "The model declined this request. Try rephrasing." };
-    const text = (data?.content || [])
-      .filter((b) => b.type === "text")
-      .map((b) => b.text)
-      .join("")
-      .trim();
-    try {
-      return { value: JSON.parse(text) };
-    } catch {
-      return { error: "Could not parse the generated content. Try again." };
-    }
-  } catch (e) {
-    return { error: e.message || "Network error calling Anthropic." };
   }
 }

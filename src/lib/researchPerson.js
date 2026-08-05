@@ -25,9 +25,10 @@
 // LinkedIn is always the snippet case: it serves an auth wall to servers, so the
 // linkedin_url on every request is a routing input, never a readable source.
 
-import { chatJSON, aiProvider } from "./llm.js";
+import { chatJSON, aiProvider, aiModel } from "./llm.js";
 import { crawlInstitution, crawlPages, isUnfetchable } from "./researchCrawl.js";
 import { multiSearch, searchEnabled } from "./search.js";
+import { corroborate } from "./corroborate.js";
 
 // The spec's default min_confidence. Facts at or above this may be cited.
 export const CITATION_FLOOR = 0.7;
@@ -73,6 +74,27 @@ const HOOK = obj({
   date: nstr("ISO YYYY-MM-DD when this is a dated event, else null."),
 });
 
+// What the outreach is actually about. Generic org research yields generic email:
+// "your esteemed institution" is true of every college in India. These are the
+// fields that make a placement email specific to ONE institution. Every field is
+// nullable and null is the correct answer when the sources do not say so.
+const PLACEMENT_SCHEMA = obj({
+  placement_cell_name: nstr("e.g. 'Training and Placement Cell'. Null unless named."),
+  placement_page_url: nstr("URL of their placements page, copied from a [SOURCE] line."),
+  recruiters_named: { type: "array", items: { type: "string" }, description: "Companies the sources say recruit there. Max 15, names exactly as written." },
+  placement_rate: nstr("Only with a basis, e.g. '92% (2024, B.Tech)'. Null otherwise."),
+  placement_rate_basis: nstr("institution_wide | one department | one batch. Null if unclear."),
+  students_placed: nstr("Count placed, if stated."),
+  cohort_size: nstr("Graduating batch or student strength, if stated."),
+  highest_package: nstr("Only if printed, with currency/unit as written."),
+  average_package: nstr("Only if printed, with currency/unit as written."),
+  training_programmes: { type: "array", items: { type: "string" }, description: "Pre-placement training they ALREADY run (aptitude, mock interviews, CV workshops). Max 6." },
+  placement_season: nstr("When campus drives run, if stated."),
+  disciplines: { type: "array", items: { type: "string" }, description: "Courses/branches placed. Max 8." },
+  accreditation: nstr("NAAC grade / NBA / AICTE approval as literally stated."),
+  placement_facts: { type: "array", items: FACT, description: "Each placement claim above as a citable sentence with its own source_url." },
+});
+
 const ORG_SCHEMA = obj({
   name: nstr("Official name as written on their own site."),
   location: nstr("City, state/country."),
@@ -82,6 +104,7 @@ const ORG_SCHEMA = obj({
   recent_news: { type: "array", items: FACT, description: "Max 5. Dated institutional news. Empty when none is dated and sourced." },
   key_urls: { type: "array", items: { type: "string" }, description: "Only URLs that appeared in the sources." },
   hooks: { type: "array", items: HOOK, description: "Max 5 candidate org-level angles. Code picks the final 3." },
+  placement: PLACEMENT_SCHEMA,
   facts: { type: "array", items: FACT, description: "Every claim above that could be quoted in an email." },
 });
 
@@ -125,7 +148,19 @@ RULES
    omit it.`;
 
 const ORG_SYSTEM = `${SYSTEM_BASE}
-8. You are extracting facts about the TARGET ORGANISATION only. Many of these
+8. PLACEMENTS ARE THE POINT. This research feeds outreach about student placement,
+   so the "placement" block is the most valuable thing you can fill in: who runs
+   the placement cell, which companies recruit there, what percentage is placed and
+   on what basis, packages, what training they already provide, when their season
+   runs. A correct-but-generic institutional summary is a FAILED extraction.
+9. Prefer the SPECIFIC over the impressive. "Recruiters include Deloitte, TATA and
+   Cognizant" is worth more than "an excellent placement record", because the first
+   is checkable and the second is what every college says about itself.
+10. A placement rate needs a BASIS. "94%" alone is unusable; "94% of the 2024 B.Tech
+   batch" is a fact. If the basis is not stated, record the number and say so in
+   placement_rate_basis rather than inventing one. NEVER compute a rate yourself
+   from two other numbers.
+11. You are extracting facts about the TARGET ORGANISATION only. Many of these
    sites belong to a group or trust running several institutions. A sibling's
    ranking, accreditation or award must NEVER be recorded as the target's. If a
    fact could belong to either, omit it.`;
@@ -241,13 +276,24 @@ export async function researchOrg({ name, url, department, field }) {
   const orgName = String(name || "").trim();
   if (!orgName && !url) return { error: "An organisation name or url is required." };
 
+  // Aimed at what the email is about. The old set asked for "official site" and
+  // "departments" and got homepages back, which is why early batches were generic:
+  // placement data lives on /placement, in recruiter lists and in drive news, and
+  // you only reach those pages by asking for them by name.
+  const year = new Date().getFullYear();
   const queries = [
-    `${orgName} official site`,
-    department ? `${orgName} ${department} department` : `${orgName} departments`,
-    `${orgName} news ${new Date().getFullYear()}`,
-    field ? `${orgName} ${field} research news` : `${orgName} ranking accreditation`,
+    `"${orgName}" training and placement cell`,
+    `"${orgName}" placement percentage students placed ${year} OR ${year - 1}`,
+    `"${orgName}" recruiters companies campus placement list`,
+    `"${orgName}" highest package average package placement`,
+    department ? `"${orgName}" ${department} placement` : `"${orgName}" placement training programme`,
+    `"${orgName}" campus placement drive news ${year}`,
   ];
-  const search = await multiSearch(queries, { perQuery: 4 });
+  // Query count is tunable so the cost/quality trade can be measured rather than
+  // asserted. Fewer queries means fewer discovered URLs — which matters most for
+  // organisations with no website of their own, where search is the only source.
+  const maxQ = Number(process.env.SEARCH_QUERIES_PER_ORG) || queries.length;
+  const search = await multiSearch(queries.slice(0, maxQ), { perQuery: 4 });
   const { fetchable, snippets } = partitionHits(search.results, MAX_ORG_PAGES);
 
   // A known website is worth more than any search hit: crawlInstitution() follows
@@ -304,14 +350,33 @@ export async function researchOrg({ name, url, department, field }) {
     recent_news: (v.recent_news || []).slice(0, 5),
     key_urls: [...new Set([...(v.key_urls || []), ...documents.map((d) => d.url)])].slice(0, 12),
     hooks: (v.hooks || []).slice(0, 5),
+    placement: v.placement || null,
     facts: (v.facts || []).slice(0, 20),
   };
+
+  // Placement claims are ordinary facts for sourcing purposes, and they must be:
+  // the placement block is exactly where a model is most tempted to round "good
+  // placements" up into a number.
+  if (org.placement?.placement_facts?.length) {
+    org.facts = [...org.facts, ...org.placement.placement_facts].slice(0, 32);
+  }
 
   const urls = {
     fetched: new Set(documents.map((d) => d.url)),
     snippet: new Set(snippets.map((s) => s.url)),
   };
   const quality = enforceSourcing(org, urls);
+
+  // Then agreement. This is the step that turns "search OR site" into
+  // "search AND site": a snippet the crawler confirmed is promoted above the
+  // floor, and two sources disagreeing on one number are both pushed below it.
+  const merged = corroborate(org.facts, { floor: CITATION_FLOOR });
+  org.facts = merged.facts;
+  quality.corroboration = merged.report;
+  if (org.hooks?.length) {
+    const h = corroborate(org.hooks.map((x) => ({ ...x, fact: x.text })), { floor: CITATION_FLOOR });
+    org.hooks = h.facts.map(({ fact, ...rest }) => ({ ...rest, text: fact }));
+  }
 
   return {
     org,
@@ -351,7 +416,11 @@ export async function researchPerson({ person, org }) {
     p.linkedin_url ? `${p.linkedin_url}` : `"${fullName}" linkedin`,
     orgName ? `"${fullName}" ${orgName} publications OR profile OR faculty` : "",
   ].filter(Boolean);
-  const search = await multiSearch(queries, { perQuery: 4 });
+  // Query count is tunable so the cost/quality trade can be measured rather than
+  // asserted. Fewer queries means fewer discovered URLs — which matters most for
+  // organisations with no website of their own, where search is the only source.
+  const maxQ = Number(process.env.SEARCH_QUERIES_PER_ORG) || queries.length;
+  const search = await multiSearch(queries.slice(0, maxQ), { perQuery: 4 });
 
   // Caller-supplied URLs are ranked ahead of anything search found: the caller
   // knows which page is actually this person, and search does not.
@@ -422,8 +491,16 @@ export async function researchPerson({ person, org }) {
     skills_interests: (v.skills_interests || []).filter(Boolean).slice(0, 8),
     notable_items: (v.notable_items || []).slice(0, 5),
     hooks: (v.hooks || []).slice(0, 5),
+    placement: v.placement || null,
     facts: (v.facts || []).slice(0, 20),
   };
+
+  // Placement claims are ordinary facts for sourcing purposes, and they must be:
+  // the placement block is exactly where a model is most tempted to round "good
+  // placements" up into a number.
+  if (org.placement?.placement_facts?.length) {
+    org.facts = [...org.facts, ...org.placement.placement_facts].slice(0, 32);
+  }
 
   const urls = {
     fetched: new Set(documents.map((d) => d.url)),
@@ -469,7 +546,7 @@ export function emptyPerson(p) {
 }
 
 export function researchModel() {
-  return process.env.OPENAI_GEN_MODEL || process.env.ANTHROPIC_GEN_MODEL || null;
+  return aiModel("gen");
 }
 
 export { aiProvider };

@@ -3,7 +3,7 @@
 // plain code (see worker/reply-scan.mjs) — the model only classifies.
 //
 // Provider-agnostic via src/lib/llm.js — uses OpenAI (OPENAI_API_KEY) or Claude
-// (ANTHROPIC_API_KEY), whichever is configured, with structured outputs. If no
+// with structured outputs. If no
 // key is set, classifyReply returns null and the caller falls back to the crude
 // "any reply -> stop" rule.
 

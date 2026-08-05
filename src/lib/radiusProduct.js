@@ -25,7 +25,7 @@
 // demo carries the email — the same honesty note that governs radiusBlock.js.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { chatJSON, aiProvider } from "./llm.js";
+import { chatJSON, aiProvider, aiModel } from "./llm.js";
 import { crawlPages } from "./researchCrawl.js";
 import { pool } from "./db.js";
 
@@ -195,7 +195,7 @@ export async function saveRadiusProduct({ product, quality, input }) {
         product.pricing, product.compliance_notes,
         JSON.stringify(product.facts), product.source_urls,
         JSON.stringify(input || {}), JSON.stringify(product), JSON.stringify(quality || {}),
-        aiProvider(), process.env.OPENAI_GEN_MODEL || process.env.ANTHROPIC_GEN_MODEL || null,
+        aiProvider(), aiModel("gen"),
       ]
     );
     await client.query("COMMIT");
@@ -216,6 +216,7 @@ export async function currentRadiusProduct() {
 /** Row -> the compact block the campaign and email prompts consume. */
 export function productBlock(row) {
   if (!row) return null;
+  const extra = row.output || {};
   return {
     name: row.name,
     url: row.url,
@@ -224,16 +225,39 @@ export function productBlock(row) {
     audience: row.audience || [],
     capabilities: (row.capabilities || []).map((c) => ({ name: c.name, description: c.description })),
     value_props: (row.value_props || []).map((c) => ({ name: c.name, description: c.description })),
-    // Empty today, and the prompts are told so explicitly rather than left to
-    // notice an absent key and improvise around it.
-    proof_points: (row.proof_points || []).map((c) => ({ name: c.name, description: c.description })),
-    offers: (row.offers || []).map((c) => ({ name: c.name, description: c.description })),
+    // No longer empty. The pipeline was built around proof_available: "NONE";
+    // there are now real, sourced proofs, so the campaign and email may cite them
+    // — and no_orphan_numbers will accept their figures because they are in the
+    // contract. Anything NOT here is still off limits.
+    proof_points: (row.proof_points || []).map((c) => ({ fact: c.fact || c.name, source_url: c.source_url || null })),
+    // best_for is the routing hint: which institution each offer suits.
+    offers: (row.offers || []).map((c) => ({ name: c.name, description: c.description, best_for: c.best_for || null })),
     pricing: row.pricing || null,
+    cta_selection_logic: extra.cta_selection_logic || null,
   };
 }
 
+/** Roadmap items that must never appear in an email — they do not exist yet. */
+export function doNotCite(row) {
+  return (row?.output?.DO_NOT_CITE_roadmap_only) || [];
+}
+
 /** Fetch-and-store in one call, used by `npm run radius:sync` and the API. */
-export async function syncRadiusProduct({ url = RADIUS_URL } = {}) {
+export async function syncRadiusProduct({ url = RADIUS_URL, force = false } = {}) {
+  // The current row may have been supplied by hand (data/radius_data.json) and be
+  // far richer than anything the site publishes — the site has no pricing, no
+  // proof points and three of the four capabilities. Re-crawling would silently
+  // replace all of that with a thinner truth. Refuse unless explicitly forced.
+  const current = await currentRadiusProduct();
+  if (current?.quality?.hand_supplied && !force) {
+    return {
+      error:
+        "The current radius_product row was supplied by hand and is richer than the site. " +
+        "Re-crawling would discard pricing, proof points and capabilities the site does not publish. " +
+        "Pass force:true to overwrite it deliberately.",
+      row: current,
+    };
+  }
   const r = await extractRadiusProduct({ url });
   if (r.error) return { error: r.error };
   const row = await saveRadiusProduct({ product: r.product, quality: r.quality, input: { url } });

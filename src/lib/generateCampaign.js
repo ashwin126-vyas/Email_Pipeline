@@ -19,7 +19,7 @@
 // have to invent it. A category line needs no numbers, which is exactly why it
 // suits a product whose proof_points array is legitimately empty.
 
-import { chatJSON, aiProvider } from "./llm.js";
+import { chatJSON, aiProvider, aiModel } from "./llm.js";
 import { pool } from "./db.js";
 
 export const CAMPAIGN_PROMPT_VERSION = "campaign-v1-2026-07";
@@ -110,6 +110,7 @@ export function buildCampaignPrompt({ product, research, orgName, recentLines = 
       department: research?.university?.relevant_department || "",
       hooks: (syn.top_hooks || []).slice(0, 3),
       shared_context: syn.shared_context || "",
+      placement: research?.university?.placement || null,
       // Only facts that cleared the citation floor reach a campaign, same as an email.
       facts: (research?.provenance || []).filter((p) => Number(p.confidence) >= 0.7).map((p) => p.fact).slice(0, 8),
     },
@@ -378,7 +379,7 @@ export async function saveCampaign({ orgKey, orgName, orgResearchId, productId, 
         JSON.stringify(result?.input || {}), result?.prompts?.system || "", result?.prompts?.user || "",
         result?.prompts?.version || null, JSON.stringify(c),
         Boolean(result?.validation?.valid), JSON.stringify(result?.validation?.gates || {}),
-        aiProvider(), process.env.OPENAI_GEN_MODEL || process.env.ANTHROPIC_GEN_MODEL || null,
+        aiProvider(), aiModel("gen"),
         result?.error || null,
       ]
     );

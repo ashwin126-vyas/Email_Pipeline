@@ -22,6 +22,9 @@ const limit = Number(args.find((a) => /^\d+$/.test(a))) || 10;
 // Force a fresh campaign even when one is cached for that org — use after
 // changing the campaign prompt or gates.
 const refreshCampaign = args.includes("--refresh-campaign");
+// Re-run research (search + crawl + extract) instead of reusing the cached org
+// row. Needed after a change to the extraction schema or the search provider.
+const refresh = args.includes("--refresh");
 // Generate the NEXT step for people who already have an email, reusing their
 // cached research and their institution's existing campaign.
 const followup = args.includes("--followup");
@@ -70,7 +73,8 @@ for (const [i, r] of rows.entries()) {
         org_url: r.website_url,
       },
       email_intent: intent,
-      constraints: { max_words: 140 },
+      constraints: { max_words: 250, min_words: 180, tone_override: "formal" },
+      refresh,
       refresh_campaign: refreshCampaign,
       followup,
       run_label: `prepare_data_one#${r.id}${followup ? " followup" : ""}`,
@@ -94,6 +98,7 @@ for (const [i, r] of rows.entries()) {
       name: r.name,
       company: (r.company || "").slice(0, 34),
       coverage: out.research.meta.coverage,
+      srcs: out.research.meta.sources_checked,
       hooks: out.research.synthesis.top_hooks.length,
       step: out.step_number,
       campaign: out.campaign?.cached ? "cached" : "new",

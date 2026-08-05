@@ -31,7 +31,7 @@ export async function POST(req) {
   }
   if (!aiEnabled()) {
     return Response.json(
-      { error: "No AI key set. Add OPENAI_API_KEY (or ANTHROPIC_API_KEY) to .env." },
+      { error: "No AI key set. Add OPENAI_API_KEY to .env." },
       { status: 422 }
     );
   }

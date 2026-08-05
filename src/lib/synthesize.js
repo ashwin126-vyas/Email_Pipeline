@@ -290,6 +290,7 @@ export function synthesize({
       type: org?.type || "",
       relevant_department: org?.relevant_department || "",
       ranking_notes: org?.ranking_notes || "",
+    placement: org?.placement || null,
       recent_news: (org?.recent_news || []).map((f) => f.fact).filter(Boolean),
       key_urls: org?.key_urls || [],
     },

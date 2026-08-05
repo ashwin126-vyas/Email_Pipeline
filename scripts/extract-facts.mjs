@@ -23,7 +23,7 @@ const limit = arg === "all" ? 10000 : parseInt(arg, 10) || 5;
 
 const provider = aiProvider();
 if (!provider) {
-  console.error("No AI key set. Add OPENAI_API_KEY (or ANTHROPIC_API_KEY) to .env.");
+  console.error("No AI key set. Add OPENAI_API_KEY to .env.");
   process.exit(1);
 }
 

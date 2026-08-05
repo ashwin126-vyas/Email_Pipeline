@@ -217,6 +217,7 @@ export async function runResearch({
   sender_context = "",
   refresh = false,
   persist = true,
+  skipPerson = false,
 } = {}) {
   const p = person || {};
   if (!clean(p.full_name)) return { error: "person.full_name is required." };
@@ -301,7 +302,13 @@ export async function runResearch({
     }
   }
 
-  const personResult = await researchPerson({ person: p, org: orgBlock });
+  // With role objectives in place, the person layer is usually not worth its cost:
+  // these contacts' LinkedIn is behind an auth wall and their college page rarely
+  // says more than their name, so ~₹1.92 per contact bought very little. What
+  // actually differs between contacts is the ROLE, which is researched once.
+  const personResult = skipPerson
+    ? { person: emptyPerson(p), sources: { documents: [], snippets: [], fetched: 0, snippets_only: 0 }, quality: { skipped: "role_objectives" } }
+    : await researchPerson({ person: p, org: orgBlock });
   if (personResult.error) return { error: personResult.error };
   const personBlock = personResult.person || emptyPerson(p);
 

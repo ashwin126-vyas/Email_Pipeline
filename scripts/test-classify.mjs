@@ -4,7 +4,7 @@
 //   node --env-file=.env scripts/test-classify.mjs
 //   node --env-file=.env scripts/test-classify.mjs "your own reply text here"
 //
-// With ANTHROPIC_API_KEY set it prints the label Claude assigns each reply.
+// With OPENAI_API_KEY set it prints the label the model assigns each reply.
 // Without it, it shows the "any reply -> stop" fallback the worker would use.
 
 import { classifyReply } from "../src/lib/classify.js";
@@ -20,8 +20,8 @@ const samples = custom
       { subject: "Re: quick question", body: "Not interested, we already have a vendor for this. Thanks." },
     ];
 
-const hasKey = Boolean(process.env.ANTHROPIC_API_KEY);
-console.log(hasKey ? "ANTHROPIC_API_KEY is set — classifying with Claude.\n" : "No ANTHROPIC_API_KEY — showing the no-AI fallback.\n");
+const hasKey = Boolean(process.env.OPENAI_API_KEY);
+console.log(hasKey ? "OPENAI_API_KEY is set — classifying with the model.\n" : "No OPENAI_API_KEY — showing the no-AI fallback.\n");
 
 for (const s of samples) {
   const result = await classifyReply(s);

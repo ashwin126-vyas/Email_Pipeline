@@ -5,7 +5,7 @@
 //     research notes; used by `npm run research:companies`.
 //
 // Provider-agnostic: delegates the actual model call to src/lib/llm.js, which
-// uses OpenAI (OPENAI_API_KEY) or Claude (ANTHROPIC_API_KEY) with structured
+// uses OpenAI (OPENAI_API_KEY) with structured
 // outputs so the response is always valid JSON in our shape. This module owns
 // the schemas and the copywriting prompts.
 

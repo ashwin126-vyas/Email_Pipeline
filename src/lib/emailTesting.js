@@ -15,11 +15,12 @@
 
 import { pool } from "./db.js";
 import { runResearch, orgKey } from "./personResearchStore.js";
-import { currentRadiusProduct, productBlock, syncRadiusProduct, RADIUS_URL } from "./radiusProduct.js";
+import { currentRadiusProduct, productBlock, doNotCite, syncRadiusProduct, RADIUS_URL } from "./radiusProduct.js";
 import { generateCampaign, saveCampaign, currentCampaignForOrg, campaignBlock } from "./generateCampaign.js";
 import { generatePersonEmail } from "./generatePersonEmail.js";
 import { generateFollowup, FOLLOWUP_STEPS } from "./generateFollowup.js";
-import { aiProvider } from "./llm.js";
+import { aiProvider, aiModel } from "./llm.js";
+import { roleForTitle, roleBlock } from "./roleObjectives.js";
 
 export function emailTestingHint(e) {
   return /relation .*(email_testing|radius_product|radius_campaigns).* does not exist/i.test(e.message)
@@ -61,11 +62,47 @@ export async function runEmailTest({
   const researchInput = { mode, person: p, target: target || null, email_intent, sender_context };
 
   // ── stage 1: research (them) ──────────────────────────────────────────────
+  // The role carries what person research used to try to find, at zero marginal
+  // cost after the one-time research. Set USE_ROLE_OBJECTIVES=false to fall back.
+  const useRoles = String(process.env.USE_ROLE_OBJECTIVES ?? "true") !== "false";
+  const roleRow = useRoles ? await roleForTitle(p.position) : null;
+  const role = roleBlock(roleRow);
+
   const researched = await runResearch({
     mode, person: p, target, email_intent, sender_context, refresh, persist: true,
+    skipPerson: Boolean(role),
   });
   if (researched.error) return { error: researched.error };
   const research = researched.research;
+
+  // Facts a human vouched for, merged in beside the crawled ones. They are held
+  // separately (see verified_facts in schema.sql) so a re-crawl cannot wipe them,
+  // and they enter the contract through the same confidence floor as everything
+  // else — a human assertion is treated as evidence, not as an exemption.
+  if (key) {
+    try {
+      const { rows: vf } = await pool.query(
+        `SELECT fact, source_url, confidence FROM verified_facts
+          WHERE lower(org_key) = lower($1) AND is_active ORDER BY id`,
+        [key]
+      );
+      if (vf.length) {
+        // Human-vouched facts go FIRST. They were added because someone wanted
+        // them used, and buried at position nine in allowed_facts they are
+        // frequently skipped — it took three attempts before the generator
+        // reached for one.
+        research.provenance = [
+          ...vf.map((f) => ({
+            fact: f.fact,
+            source_url: f.source_url || null,
+            confidence: Number(f.confidence),
+            verified_by_human: true,
+          })),
+          ...(research.provenance || []),
+        ];
+      }
+    } catch { /* table missing — not a reason to fail the run */ }
+  }
 
   // ── stage 2: radius (us) ──────────────────────────────────────────────────
   // Auto-sync on first use so a fresh database does not fail with an empty table.
@@ -78,6 +115,7 @@ export async function runEmailTest({
     radiusInput.auto_synced = true;
   }
   const product = productBlock(productRow);
+  if (product) product.do_not_cite = doNotCite(productRow);
 
   // ── stage 3: campaign (per organisation, cached) ──────────────────────────
   let campaignRow = key && !refresh_campaign ? await currentCampaignForOrg(key) : null;
@@ -132,18 +170,38 @@ export async function runEmailTest({
     // The WHOLE thread, not just the last email: validateFollowup() compares the
     // new step against every previous one, so handing it only the most recent
     // would let step 2 quietly repeat step 0.
-    const { rows } = await pool.query(
-      `SELECT DISTINCT ON (step_number) id, subject, body, step_number, tone, created_at
-         FROM email_testing
+    //
+    // "Thread" means one chain of parent_id links from one first email — NOT
+    // every row this person appears in. Picking the max step_number across all
+    // their history stitches a step 1 from today onto a step 3 written last week
+    // and calls the result step 4: the follow-up then answers an email that was
+    // never sent, and the comparative gates measure it against an unrelated one.
+    // Regenerating a first email starts a NEW thread, so the newest root wins.
+    const { rows: roots } = await pool.query(
+      `SELECT id FROM email_testing
         WHERE lower(person_email) = lower($1) AND subject IS NOT NULL AND is_valid
-        ORDER BY step_number, created_at DESC`,
+          AND COALESCE(step_number, 1) = 1 AND parent_id IS NULL
+        ORDER BY created_at DESC, id DESC LIMIT 1`,
       [p.email || ""]
     );
-    thread = rows;
-    parent = rows.length ? rows[rows.length - 1] : null;
-    if (!parent) {
+    if (!roots.length) {
       return { error: `No previous email found for ${p.email || p.full_name} — generate the initial email first.` };
     }
+    const { rows } = await pool.query(
+      `WITH RECURSIVE chain AS (
+         SELECT id, subject, body, step_number, tone, created_at, parent_id
+           FROM email_testing WHERE id = $1
+         UNION ALL
+         SELECT c.id, c.subject, c.body, c.step_number, c.tone, c.created_at, c.parent_id
+           FROM email_testing c JOIN chain ON c.parent_id = chain.id
+          WHERE c.subject IS NOT NULL AND c.is_valid
+       )
+       SELECT DISTINCT ON (step_number) id, subject, body, step_number, tone, created_at
+         FROM chain ORDER BY step_number, created_at DESC`,
+      [roots[0].id]
+    );
+    thread = rows;
+    parent = rows[rows.length - 1] || null;
   }
 
   let recentSubjects = [];
@@ -186,7 +244,7 @@ export async function runEmailTest({
       })
     : await generatePersonEmail({
         research, mode, emailIntent: email_intent, senderContext: sender_context,
-        constraints, product, campaign, recentSubjects,
+        constraints, product, campaign, recentSubjects, role,
       });
 
   // ── log every stage ───────────────────────────────────────────────────────
@@ -238,7 +296,7 @@ export async function runEmailTest({
         email?.contract?.tone || null, emailOutput.warnings,
         Boolean(email?.validation?.valid), JSON.stringify(email?.validation?.gates || {}),
         email?.error ? "failed" : email?.validation?.valid ? "draft" : "rejected",
-        aiProvider(), process.env.OPENAI_GEN_MODEL || process.env.ANTHROPIC_GEN_MODEL || null,
+        aiProvider(), aiModel("gen"),
         email?.error || null,
         parent ? (parent.step_number || 0) + 1 : 1,
         parent?.id || null, parent?.subject || null, parent?.body || null,
