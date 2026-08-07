@@ -20,6 +20,7 @@
 // suits a product whose proof_points array is legitimately empty.
 
 import { chatJSON, aiProvider, aiModel } from "./llm.js";
+import { enterpriseHits } from "./generatePersonEmail.js";
 import { pool } from "./db.js";
 
 export const CAMPAIGN_PROMPT_VERSION = "campaign-v1-2026-07";
@@ -31,14 +32,19 @@ const CAMPAIGN_SCHEMA = {
   properties: {
     campaign_line: { type: "string", description: `The line. Max ${MAX_LINE_WORDS} words. MUST contain the product name.` },
     line_meaning: { type: "string", description: "Plain-English gloss. Required when the line uses Hindi/Hinglish." },
-    theme: { type: "string", description: "The idea in one short phrase." },
+    theme: { type: "string", description: "One line, institution-first, built on FREE. What the UNIVERSITY gets." },
     big_idea: { type: "string", description: "Two sentences on why this lands for THIS institution." },
-    audience: { type: "string", description: "The STUDENTS this speaks to at this institution, not the staff." },
-    pain_framing: { type: "string", description: "What a STUDENT runs into, as a category observation, never an accusation." },
+    audience: { type: "string", description: "Who this speaks to at this institution: the placement officer, and the students behind them." },
+    pain_framing: { type: "string", description: "What students run into, as a category observation, never an accusation about this institution." },
+    chosen_angles: {
+      type: "array",
+      items: { type: "string" },
+      description: "1-2 keys from product.must_state.headline_angles that this campaign leads on. The email stage leads the body on these.",
+    },
     talking_points: {
       type: "array",
       items: { type: "string" },
-      description: "3-5 points an email may draw on, in terms of what a student gets. Only capabilities the product block lists.",
+      description: "3-5 points an email may draw on, each pointed at the OFFICER. At least one FREE, one live cohort analytics. Only capabilities the product block lists.",
     },
     subject_angles: { type: "array", items: { type: "string" }, description: "3 short subject-line angles." },
     cta: { type: "string", description: "One ask, taken from the product's offers. The officer is a route to students, not a buyer." },
@@ -46,59 +52,71 @@ const CAMPAIGN_SCHEMA = {
   },
   required: [
     "campaign_line", "line_meaning", "theme", "big_idea", "audience",
-    "pain_framing", "talking_points", "subject_angles", "cta", "language_notes",
+    "pain_framing", "chosen_angles", "talking_points", "subject_angles", "cta", "language_notes",
   ],
   additionalProperties: false,
 };
 
-const SYSTEM = `You are a campaign planner for an Indian CONSUMER (B2C) product. You write
-ONE campaign per institution, in the Indian market.
+const SYSTEM = `You are a campaign planner for an Indian product sold to STUDENTS but pitched to
+their UNIVERSITY. You write ONE campaign per institution, in the Indian market.
 
-WHO THE CUSTOMER IS
-The product is used by STUDENTS. They are the customer. The institution is not
-buying anything and is not the user — the placement officer you are writing to is
-a route to their students, an advocate, not a purchaser. So:
-  - the campaign speaks to what a STUDENT gets: their CV, their applications,
-    their first job. Not institutional efficiency, not placement-cell workload,
-    not reporting, not "outcomes for your institution".
-  - never write like enterprise software. No procurement, no licences, no
-    rollout, no pilots, no "solution for your institution", no ROI.
-  - the ask to the officer is that their students hear about it, not that the
-    institution buys it.
+WHO YOU ARE WRITING FOR
+The end user and payer is the STUDENT (a Rs 20 kit). But the person who receives
+this outreach is a PLACEMENT OFFICER at the university, and they act on what THEY
+get, not on what their students get. So the campaign theme, pain_framing and cta
+must be written from the UNIVERSITY'S point of view.
 
-THE MODEL TO FOLLOW
-"Thanda Matlab Coca-Cola" is the reference. Study why it works:
-  - three words, instantly repeatable
-  - it names the brand, so no competitor can borrow it
-  - it claims a CATEGORY ("thanda" = cold drinks), not a statistic
-  - it is Hinglish and spoken, not translated corporate English
-Produce a line with those properties for this product and this institution.
+WHAT THE CAMPAIGN MUST CARRY (from product.must_state)
+1. FREE is the spine of the theme, always. RadiusAI costs the university nothing
+   and every student starts free.
+2. Then SELECT. Read product.must_state.headline_angles and choose the ONE, at
+   most TWO, that fit THIS institution's research facts, type and region. Lead the
+   theme and talking_points on the selected angle(s), expressed through this
+   institution's specifics. Do not carry all of them; that produces a templated
+   email. Guidance: ai_age for reputation-conscious or private schools;
+   placement_rate when the KPI is the headline; no_student_left_behind for large
+   cohorts or high student-to-officer ratio; live_command for data-driven or
+   differentiation-focused schools. When unsure, pick the angle the institution's
+   own facts most support.
+3. Do NOT theme on revenue here; that is a follow-up pillar handled downstream.
+
+You emit a chosen_angles array (the keys you selected) so the email stage knows
+which to lead on.
+
+WHAT IS STILL BANNED
+Enterprise and procurement language: licence, rollout, deployment, ROI, vendor,
+"solution for your institution", SLA. Vague "improve your outcomes" waffle with no
+concrete mechanism. Superiority or unprovable claims: "only company", "#1",
+"best", "proven", "guarantee", or any figure not in the input. You have NO
+statistics beyond the input. Claim a category and a concrete free benefit, never a
+result.
+
+THE CAMPAIGN LINE
+"Thanda Matlab Coca-Cola" is the reference for campaign_line only: at most
+${MAX_LINE_WORDS} words, contains the product name, claims a category not a
+number, Hinglish and spoken. Give the English gloss in line_meaning. This line is
+a memorable tagline, not the email; the email will not paste it.
 
 RULES
 1. Output valid JSON only. No preamble, no markdown fences.
-2. campaign_line: at most ${MAX_LINE_WORDS} words and it MUST contain the product name.
-   Hinglish is welcome. Give the English gloss in line_meaning.
-3. Claim a category, never a number. You have NO statistics, NO customer names and
-   NO testimonials. Do not invent any. Do not write "proven", "#1", "award-winning",
-   "trusted by hundreds" or any figure that is not in the input.
-4. talking_points may only use capabilities present in the product block. You may
-   not add features, integrations or outcomes the product does not list.
-5. This is India. Speak the way students there speak about placements, campus
-   season, sitting for companies and landing a first job. Hinglish is native
-   here, not decoration. Do not use American campus-recruiting vocabulary.
-6. pain_framing is about what a STUDENT runs into, framed as a category
-   observation. Never an accusation about this institution and never a claim that
-   their placement outcomes are poor.
+2. theme: one line, institution-first, built on FREE. e.g. "Get every student
+   placement-ready at no cost to you."
+3. pain_framing: a category observation about what students run into, never an
+   accusation about this institution and never a claim their outcomes are poor.
+4. cta: take from cta_selection_logic for this institution. One ask.
+5. talking_points: 3 to 5, each usable in an email, each pointed at the officer.
+   At least one must be FREE and one must be the live cohort analytics. Use only
+   capabilities in the product block.
+6. Use the institution's own research facts to make the theme specific to them. If
+   a fact is not in the input, you do not know it.
 7. No em-dashes. No exclamation marks. No "revolutionise", "cutting-edge",
    "leverage", "game-changer", "in today's competitive landscape".
-8. Use the institution's own research facts to make big_idea specific to them.
-   If a fact is not in the input, you do not know it.
-9. If "avoid_lines" is present, those lines are already in use at OTHER
-   institutions. Yours must be genuinely different, not the same construction with
-   one word swapped. "Placement Ka Saathi", "Placement Ka Partner" and "Placement
-   Ka Guru" are the same line three times. Change the IDEA, not the noun: work
-   from this institution's own facts, its discipline, its region or its students'
-   destination, so the line could not be lifted onto a different college.`;
+8. If avoid_lines is present, your campaign_line must be a genuinely different
+   IDEA, not the same construction with one word swapped. "Placement Ka Saathi",
+   "Placement Ka Partner" and "Placement Ka Guru" are the same line three times.
+   Change the IDEA, not the noun: work from this institution's own facts, its
+   discipline, its region or its students' destination, so the line could not be
+   lifted onto a different college.`;
 
 export function buildCampaignPrompt({ product, research, orgName, recentLines = [] }) {
   const syn = research?.synthesis || {};
@@ -133,18 +151,37 @@ const norm = (s) => String(s ?? "").toLowerCase();
 const numbersIn = (s) => (String(s ?? "").match(/\d[\d,]*(?:\.\d+)?/g) || []).map((n) => n.replace(/,/g, ""));
 
 const BANNED = [
-  "revolutionise", "revolutionize", "cutting-edge", "leverage", "game-changer",
+  "revolutionise", "revolutionize", "cutting-edge", "game-changer",
   "game changer", "in today's competitive landscape", "world-class", "best-in-class",
 ];
-// Claims that assert evidence we do not have.
-const UNBACKED = [
+// Superiority claims. These are banned ALWAYS, proof or no proof — a pilot with
+// one school licenses "we ran a pilot", it does not license "#1" or "best". This
+// split matters now that the product row carries real proof_points: the old
+// single list was skipped wholesale whenever proof existed, which would have
+// quietly switched these off the day proof was added.
+// Inflected forms escape a substring match: "leverage" is not a substring of
+// "leveraging", and a real campaign shipped "leveraging BIT Mesra's esteemed
+// reputation" straight past the banned-word list. Anything with endings goes here.
+const BANNED_SHAPES = [
+  /\bleverag(e|es|ed|ing)\b/i,
+  /\brevolutionis(e|es|ed|ing)\b/i, /\brevolutioniz(e|es|ed|ing)\b/i,
+];
+
+const SUPERIORITY = [
   /\bproven\b/i,
   // No leading \b: "#" is not a word character, so \b# never matches after a
   // space and "#1" walked straight through the gate.
   /#\s?1\b/i,
-  /\bnumber one\b/i, /\baward[- ]winning\b/i, /\btrusted by\b/i,
-  /\bindustry[- ]leading\b/i, /\bguaranteed\b/i, /\bmost popular\b/i,
-  /\bmarket[- ]lead(er|ing)\b/i, /\bbest\b/i,
+  /\bnumber one\b/i, /\bguarantee(s|d)?\b/i,
+  /\bindustry[- ]leading\b/i, /\bmarket[- ]lead(er|ing)\b/i,
+  /\bonly (company|platform|tool|product)\b/i,
+  /\bbest[- ]in[- ]class\b/i, /\bthe best\b/i,
+  /\bwe improve your placements\b/i,
+];
+// Claims that assert evidence we do not have. Unlike the above, a real proof
+// point legitimately licenses these, so they stay proof-gated.
+const UNBACKED = [
+  /\baward[- ]winning\b/i, /\btrusted by\b/i, /\bmost popular\b/i,
 ];
 
 // Enterprise/procurement language. The product is B2C — students are the
@@ -153,7 +190,11 @@ const UNBACKED = [
 // radiusai.online's own CTA is "Partner With Us".
 const B2B_LANGUAGE = [
   /\blicen[cs]e[sd]?\b/i, /\bprocurement\b/i, /\broll[- ]?out\b/i,
-  /\bdeploy(ment|ing|ed)?\b/i, /\bpilot\b/i, /\bROI\b/, /\breturn on investment\b/i,
+  // "pilot" was here as procurement vocabulary. It is now removable and must be
+  // removed: the one sanctioned proof point is the European School of Economics
+  // PILOT, so banning the word would reject the only evidence we are allowed to
+  // cite.
+  /\bdeploy(ment|ing|ed)?\b/i, /\bROI\b/, /\breturn on investment\b/i,
   /\benterprise\b/i, /\bvendor\b/i, /\bSLA\b/, /\bprocure\b/i,
   /\bsolution for your (institution|university|college)\b/i,
   /\binstitutional efficiency\b/i, /\bcost[- ]effective for your\b/i,
@@ -212,7 +253,10 @@ export function validateCampaign({ campaign, product, input }) {
   // 3. no_unbacked_claims — we have no proof_points, so any evidence-shaped claim
   //    is fabricated by construction.
   const hasProof = (product?.proof_points || []).length > 0;
-  const unbacked = hasProof ? [] : UNBACKED.filter((re) => re.test(allText)).map((re) => String(re));
+  const unbacked = [
+    ...SUPERIORITY.filter((re) => re.test(allText)),
+    ...(hasProof ? [] : UNBACKED.filter((re) => re.test(allText))),
+  ].map((re) => String(re));
   add("no_unbacked_claims", unbacked.length === 0,
     unbacked.length ? `claims evidence we do not have: ${unbacked.join(", ")}` : null);
 
@@ -231,6 +275,7 @@ export function validateCampaign({ campaign, product, input }) {
 
   // 5. banned_phrases
   const hits = BANNED.filter((b) => norm(allText).includes(b));
+  for (const re of BANNED_SHAPES) if (re.test(allText)) hits.push(String(re).slice(1, -2));
   if (allText.includes("—") || allText.includes("–")) hits.push("em-dash");
   if (allText.includes("!")) hits.push("exclamation mark");
   add("banned_phrases", hits.length === 0, hits.length ? hits.join(", ") : null);
@@ -253,7 +298,9 @@ export function validateCampaign({ campaign, product, input }) {
 
   // 7. b2c_framing — enterprise vocabulary means the campaign is pitching the
   //    wrong customer entirely, not merely using the wrong tone.
-  const b2bHits = B2B_LANGUAGE.filter((re) => re.test(allText)).map((re) => String(re).slice(1, -2));
+  // Negation-aware, same as the email: "no procurement to navigate" is the free
+  // message, not a procurement pitch.
+  const b2bHits = enterpriseHits(allText, B2B_LANGUAGE);
   add("b2c_framing", b2bHits.length === 0,
     b2bHits.length ? `enterprise language in a B2C campaign: ${b2bHits.join(", ")}` : null);
 
@@ -317,6 +364,10 @@ export async function generateCampaign({ product, research, orgName, recentLines
       big_idea: c.big_idea || null,
       audience: c.audience || null,
       pain_framing: c.pain_framing || null,
+      // Which headline angle(s) this institution's campaign leads on. The email
+      // stage reads these; without them every email re-picks its own angle and
+      // the campaign stops being shared in any meaningful sense.
+      chosen_angles: (c.chosen_angles || []).filter(Boolean).slice(0, 2),
       talking_points: (c.talking_points || []).filter(Boolean).slice(0, 5),
       subject_angles: (c.subject_angles || []).filter(Boolean).slice(0, 3),
       cta: c.cta || null,
@@ -405,5 +456,8 @@ export function campaignBlock(row) {
     talking_points: row.talking_points || [],
     subject_angles: row.subject_angles || [],
     cta: row.cta,
+    // Stored inside output rather than as its own column: the email stage is the
+    // only consumer, and a jsonb read costs nothing here.
+    chosen_angles: (row.output && row.output.chosen_angles) || [],
   };
 }

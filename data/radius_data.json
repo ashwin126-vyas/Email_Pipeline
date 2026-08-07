@@ -4,43 +4,191 @@
   "one_liner": "The AI that gets students placed",
   "what_it_does": "RadiusAI gives every student a universal standard for job application documents, so they compete on their profile rather than on the skill of writing a CV. A student completes one structured questionnaire; RadiusAI turns it into a Master Resume and job-specific Application Kits (resume, cover letter and hiring-manager email built as one matched set), checks them against ATS systems, and tracks every application on a dashboard that feeds live placement insights back to the university.",
   "audience": ["students", "universities", "placement officers"],
+  "must_state": {
+    "how_to_use": "FREE is the mandatory spine of every email (subject, opening, close). The headline_angles below are a forceful positioning library, not a checklist. The campaign layer selects ONE, at most TWO, angles that fit THIS institution's specifics and leads the body on them. Bolting all of them into one email is how emails go templated. Every 'headline' is aspirational force written to grab; every 'substance' is the provable mechanism that keeps it from ringing hollow or tripping the proof gates. Choose the register-appropriate headline line from role.tone_register. NEVER promise a number, a ranking jump, or a placement rate; the mechanism is the claim, the outcome is only implied.",
+    "spine_free": {
+      "role": "mandatory in every email, subject + opening + closing",
+      "headline_operational": "Free for your students. Free for you. No budget, no procurement, no catch.",
+      "headline_academic": "Available to your institution and every student at no cost, with no procurement to navigate.",
+      "substance": "RadiusAI costs the university nothing and every student starts free. There is no budget line and no approval to chase.",
+      "plain_line": "Free for your students, free for you.",
+      "institutional_stake": "Cost and procedure are the reasons a placement cell says no or 'later'. Removing both removes the decision."
+    },
+    "headline_angles": [
+      {
+        "key": "ai_age",
+        "headline_operational": "Bring your campus into the AI age. No vendor, no budget, no rollout.",
+        "headline_academic": "Position your institution at the front of the AI shift in student employability.",
+        "substance": "RadiusAI is an AI platform your students already want, and your placement cell runs on live AI-driven insight, adopted at no cost and with no IT project.",
+        "institutional_stake": "Every Indian institution is under pressure to look modern and AI-ready to the students it wants to recruit next year. This is that story, for free.",
+        "plain_line": "Enter the AI age with confidence, at zero cost.",
+        "best_for": "reputation-conscious, private, or ambitious institutions; strong opener for admissions-driven schools"
+      },
+      {
+        "key": "placement_rate",
+        "headline_operational": "Lift your placement numbers, at zero cost to the university.",
+        "headline_academic": "Strengthen placement outcomes across your whole cohort, at no cost.",
+        "substance": "Every student, not only your top rankers, gets a professional, ATS-ready application, so more of them clear the automated filter that rejects most CVs before a human ever reads them.",
+        "institutional_stake": "The placement rate is the NIRF story and the admissions story. It sits on the homepage. Raising the floor of the cohort is the cheapest way to move it.",
+        "plain_line": "More of your students get through the filter.",
+        "best_for": "any institution; lead here when placement rate is the officer's headline KPI",
+        "guardrail": "Never state a percentage, a ranking, or a guaranteed lift. The ATS-ready mechanism is the claim; the higher rate is implied, never promised."
+      },
+      {
+        "key": "no_student_left_behind",
+        "headline_operational": "Get even your weakest students placement-ready.",
+        "headline_academic": "Support the students who need the most help, not only the strongest.",
+        "substance": "RadiusAI works hardest for the students who usually get filtered out before an interview. Every one of them walks away with a professional, ATS-ready application, with no one-to-one time from your cell.",
+        "institutional_stake": "The bottom of the cohort is what drags the placement rate down, and is exactly who an understaffed cell cannot reach individually.",
+        "plain_line": "No student left behind.",
+        "best_for": "large cohorts, high student-to-officer ratio, tier-2 and tier-3 institutions"
+      },
+      {
+        "key": "live_command",
+        "headline_operational": "See every student's placement journey live, for the first time.",
+        "headline_academic": "Gain real-time visibility of your entire cohort's application progress.",
+        "substance": "The officer sees every student's application and placement status across the whole cohort in real time, at no cost, and placements auto-escalate to the cell for interview support.",
+        "institutional_stake": "Most cells fly blind on where students actually are until results land. This is live command of the placement season.",
+        "plain_line": "See every student's progress live.",
+        "best_for": "data-driven, differentiation-focused, or private universities; leads follow-up 2"
+      },
+      {
+        "key": "revenue",
+        "headline_operational": "The first tool that pays your university instead of billing it.",
+        "headline_academic": "A distribution partnership under which the institution shares in the revenue.",
+        "substance": "Qualifying universities adopt RadiusAI at no cost and share in the revenue. The institution gets paid, not billed.",
+        "institutional_stake": "No education vendor pays the institution. For a placement cell that is only ever a cost centre, this is the line that gets forwarded upward to a dean.",
+        "plain_line": "This pays your university instead of billing it.",
+        "usage": "FOLLOW-UPS ONLY, and only for institutions the CTA logic routes to partnership (strong or elite). Leads follow-up 1 for those schools. Never a blanket promise, never a figure.",
+        "best_for": "strong placement record or elite standing"
+      }
+    ]
+  },
+  "claims_discipline": {
+    "note": "Protects us from the proof gates and from being punctured.",
+    "provable": [
+      "free to university and students",
+      "professional, ATS-ready applications",
+      "placement-ready",
+      "live cohort visibility",
+      "the European School of Economics pilot"
+    ],
+    "banned": [
+      "only company",
+      "#1",
+      "best",
+      "proven",
+      "guarantee placement",
+      "we improve your placements",
+      "any numeric outcome not in allowed_facts"
+    ]
+  },
   "capabilities": [
-    {"name":"Application Kit","description":"One purchase per job: a resume, cover letter and hiring-manager email generated as a single matched set, relentlessly targeted to the specific firm and role so the student's profile is positioned as closely to the job as possible."},
-    {"name":"Master Resume Builder","description":"Builds the one document a student can hand to any company for any job. A structured questionnaire captures the full profile without bias, then formatting systems built on Harvard and Oxford CV-writing conventions produce a recruiter-impressive, ATS-precise resume from selectable templates."},
-    {"name":"Free ATS Score Checker","description":"A free check that scores a student's existing CV against applicant tracking systems and shows exactly where it can improve. No payment or commitment required."},
-    {"name":"Dashboard & Application Tracker","description":"The hub of all a student's applications: one click to set and manage the status of each application. Live insights feed through to university placement officers, and when a student secures a placement it is automatically escalated to the placement cell for interview support and marketing."}
+    {
+      "name": "Application Kit",
+      "description": "One purchase per job: a resume, cover letter and hiring-manager email generated as a single matched set, relentlessly targeted to the specific firm and role so the student's profile is positioned as closely to the job as possible."
+    },
+    {
+      "name": "Master Resume Builder",
+      "description": "Builds the one document a student can hand to any company for any job. A structured questionnaire captures the full profile without bias, then formatting systems built on Harvard and Oxford CV-writing conventions produce a recruiter-impressive, ATS-precise resume from selectable templates."
+    },
+    {
+      "name": "Free ATS Score Checker",
+      "description": "A free check that scores a student's existing CV against applicant tracking systems and shows exactly where it can improve. No payment or commitment required."
+    },
+    {
+      "name": "Live Cohort Analytics (Dashboard & Application Tracker)",
+      "description": "The officer sees every student's application and placement status across the whole cohort in real time, at no cost. Students manage their own applications in one click; successful placements auto-escalate to the placement cell for interview support and marketing."
+    }
   ],
   "value_props": [
-    {"name":"Compete on your profile, not your CV-writing skill","description":"A universal document standard removes the advantage of knowing how to write a good CV. Every student's actual profile gets a fair, professional presentation."},
-    {"name":"The full application in one pass","description":"In the time it takes to start a conversation with a generic AI chatbot, a student has the CV, cover letter and hiring-manager message, all fitting one narrative and differentiating them immediately."},
-    {"name":"More time to learn, apply and grow","description":"Students stop spending hours per application on documents and use that time to apply to more jobs, gain experience and prepare for interviews."},
-    {"name":"The lowest-cost scalable solution in India","description":"Built to raise the floor, not the ceiling: priced so every student can afford it, with a free ATS check and a free demo kit as the entry point."},
-    {"name":"Universities get control, insights and analytics at no cost","description":"Adoption costs the institution nothing. Placement officers get live application and placement analytics across their cohort, automatic escalation of successes to the placement cell, and a modern replacement for charging students for CV workshops."},
-    {"name":"Connected, not isolated","description":"Generic AI tools separate students from their university. RadiusAI bridges students, universities and employers in one ecosystem, with the institution in the loop."}
+    {
+      "name": "Free to your university, and to every student",
+      "description": "Adoption costs the institution nothing and every student starts free. There is no budget line and no procurement decision."
+    },
+    {
+      "name": "Lifts the students who need it most",
+      "description": "Works hardest for the students who usually get filtered out, so even your weakest applicants become placement-ready, not just your top rankers."
+    },
+    {
+      "name": "Live visibility of your whole cohort",
+      "description": "The officer sees every student's application progress in real time, for free, and placements auto-escalate to the cell."
+    },
+    {
+      "name": "You can be paid, not billed",
+      "description": "Qualifying universities share in the revenue under a distribution partnership."
+    },
+    {
+      "name": "Compete on your profile, not your CV-writing skill",
+      "description": "A universal document standard removes the advantage of knowing how to write a good CV. Every student's actual profile gets a fair, professional presentation."
+    },
+    {
+      "name": "The full application in one pass",
+      "description": "In the time it takes to start a conversation with a generic AI chatbot, a student has the CV, cover letter and hiring-manager message, all fitting one narrative."
+    }
   ],
   "offers": [
-    {"name":"Free ATS Score Check","description":"Students check their current CV against ATS systems free, no sign-up cost. Lowest-friction entry point.","best_for":"small, rural, or thin-research institutions; any first contact where a meeting is too big an ask"},
-    {"name":"Free Demo Application Kit","description":"Every student's first Application Kit is free, and completing it doubles as their application to join RadiusAI.","best_for":"institutions where the ask is simply that students hear about the tool"},
-    {"name":"Distribution Partnership","description":"Universities adopt RadiusAI at no cost under distribution exclusivity and share in the revenue, turning student procurement into a self-fulfilling funnel. The institution gets paid, not billed.","best_for":"institutions with strong placement records or elite standing; treat as a peer conversation"},
-    {"name":"Campus Ambassador Programme","description":"RadiusAI hires student brand ambassadors per campus per year (growth intern, campus growth manager) from first and second years: commission on growth, 2 to 4 years of CV-worthy experience, and extra in-term placements and internships the university can count.","best_for":"follow-up emails as the smaller ask; institutions that value in-term placement numbers"}
+    {
+      "name": "Free ATS Score Check",
+      "description": "Students check their current CV against ATS systems free, no sign-up cost. Lowest-friction entry point.",
+      "best_for": "small, rural, or thin-research institutions; any first contact where a meeting is too big an ask"
+    },
+    {
+      "name": "Free Demo Application Kit",
+      "description": "Every student's first Application Kit is free, and completing it doubles as their application to join RadiusAI.",
+      "best_for": "institutions where the ask is simply that students hear about the tool"
+    },
+    {
+      "name": "Distribution Partnership",
+      "description": "Universities adopt RadiusAI at no cost under distribution exclusivity and share in the revenue. The institution gets paid, not billed.",
+      "best_for": "institutions with strong placement records or elite standing; treat as a peer conversation"
+    },
+    {
+      "name": "Campus Ambassador Programme",
+      "description": "RadiusAI hires student brand ambassadors per campus per year (growth intern, campus growth manager) from first and second years: commission on growth, 2 to 4 years of CV-worthy experience, and extra in-term placements and internships the university can count.",
+      "best_for": "follow-up emails as the smaller ask; institutions that value in-term placement numbers"
+    }
   ],
   "pricing": "Application Kit Rs 20 (job-specific resume, cover letter and hiring-manager email as one set); Master Resume Rs 50. Free: ATS score checker, first demo Application Kit, and 3 free kits per successful referral. Universities pay nothing to adopt; distribution partnership is revenue-sharing.",
   "proof_points": [
-    {"fact":"RadiusAI ran a pilot with the European School of Economics at its London campus, where 80 students from more than 24 countries used the platform to secure placements at firms in London, UK.","source_url":"https://www.radiusai.online/","confidence":1},
-    {"fact":"Student testing and feedback sessions across Madhya Pradesh returned uniformly positive satisfaction feedback.","source_url":"https://www.radiusai.online/","confidence":0.9}
+    {
+      "fact": "RadiusAI ran a pilot with the European School of Economics at its London campus, where 80 students from more than 24 countries used the platform to secure placements at firms in London, UK.",
+      "source_url": "https://www.radiusai.online/",
+      "confidence": 1
+    },
+    {
+      "fact": "Student testing and feedback sessions across Madhya Pradesh returned uniformly positive satisfaction feedback.",
+      "source_url": "https://www.radiusai.online/",
+      "confidence": 0.9
+    }
   ],
   "cta_selection_logic": {
-    "note": "Feed to the campaign layer. Each email still makes exactly ONE ask; this maps institution research variables to which offer that ask should be.",
+    "note": "The 'free' message from must_state goes in EVERY email regardless of coverage. This block only chooses the ASK, not whether to state the value props. Decoupled on purpose: a thin-coverage school still hears 'free' even though its ask stays the ATS checker.",
     "rules": [
-      {"if":"placement record strong OR elite/high-ranking institution","then":"Distribution Partnership conversation","framing":"peer-to-peer; their placement strength is why they qualify"},
-      {"if":"small institution OR rural location OR research coverage thin","then":"Free ATS Score Check (share the link with students)","framing":"zero friction, zero cost, no meeting requested"},
-      {"if":"private university competing on outcomes/differentiation","then":"Demo conversation anchored on dashboard insights and placement analytics","framing":"control, insights and free analytics the institution keeps"},
-      {"if":"follow-up step (any institution)","then":"Campus Ambassador Programme OR forwarding the free ATS checker to one batch","framing":"the smaller ask the follow-up prompt requires"}
+      {
+        "if": "placement record strong OR elite/high-ranking institution",
+        "then": "Distribution Partnership conversation",
+        "framing": "peer-to-peer; their placement strength is why they qualify"
+      },
+      {
+        "if": "small institution OR rural location OR research coverage thin",
+        "then": "Free ATS Score Check (share the link with students)",
+        "framing": "zero friction, zero cost, no meeting requested"
+      },
+      {
+        "if": "private university competing on outcomes/differentiation",
+        "then": "Demo conversation anchored on live cohort analytics",
+        "framing": "the free, live visibility the officer keeps"
+      },
+      {
+        "if": "follow-up step (any institution)",
+        "then": "Campus Ambassador Programme OR forwarding the free ATS checker to one batch",
+        "framing": "the smaller ask the follow-up prompt requires"
+      }
     ]
   },
   "DO_NOT_CITE_roadmap_only": [
     "Employer-connection features built on aggregated student profile data",
-    "Paid mentor marketplace inside student profiles (recruitment tutoring for a fee)",
-    "Daily/weekly/monthly placement analytics reports for officers (easy to build; good follow-up material once live)"
+    "Paid mentor marketplace inside student profiles (recruitment tutoring for a fee)"
   ]
 }

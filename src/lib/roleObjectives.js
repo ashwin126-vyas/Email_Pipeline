@@ -54,5 +54,10 @@ export function roleBlock(role) {
     decision_power: role.decision_power,
     angle: role.radius_angle,
     suggested_ask: role.cta_style,
+    // Which voice to write in. A property of the role, not the institution: a
+    // faculty member holding the placement brief is addressed differently from a
+    // placement manager at the same college. Defaults to the lower-risk formal
+    // voice when the column has not been migrated yet.
+    tone_register: role.tone_register === "operational" ? "operational" : "academic",
   };
 }

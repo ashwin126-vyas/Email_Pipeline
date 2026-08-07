@@ -241,6 +241,7 @@ export async function runEmailTest({
         product,
         campaign,
         research,
+        role,
       })
     : await generatePersonEmail({
         research, mode, emailIntent: email_intent, senderContext: sender_context,

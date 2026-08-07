@@ -248,8 +248,8 @@ test("raising min_confidence shrinks what the email is allowed to know", () => {
 });
 
 const good = {
-  subject: "your new AI centre",
-  body: "Dear Professor Rao,\n\nYour department opened a new AI centre in March, and it changes what a cohort of that size can attempt. The department runs a 900 student cohort, which is where the work usually stalls. Would you be open to a short call next week?\n\nBest,\nSam\n\nKind regards,\nAryan Shivahare\nFounder & CEO, RadiusAI",
+  subject: "your new AI centre, free for students",
+  body: "Dear Professor Rao,\n\nYour department opened a new AI centre in March, and it changes what a cohort of that size can attempt. The department runs a 900 student cohort, which is where the work usually stalls. RadiusAI is free to your institution and free for every student. Would you be open to a short call next week?\n\nBest,\nSam\n\nKind regards,\nAryan Shivahare\nFounder & CEO, RadiusAI",
   hooksUsed: ["Opened a new AI centre in March"],
   factsCited: [
     { fact: "The department opened a new AI centre in March.", source_url: FETCHED },
@@ -261,6 +261,88 @@ const good = {
 test("a well-formed email passes every gate", () => {
   const v = validatePersonEmail(good);
   assert.equal(v.valid, true, `failed: ${v.failed.join(", ")}`);
+});
+
+test("the sanctioned free copy is not rejected as enterprise language", () => {
+  // must_state's own lines say "with no procurement to navigate" and "No vendor,
+  // no budget, no rollout". A flat word ban rejected the exact copy the product
+  // block tells the model to use.
+  for (const line of [
+    "Available to your institution at no cost, with no procurement to navigate.",
+    "No vendor, no budget, no rollout.",
+    "There is no licence to buy and no deployment to schedule.",
+  ]) {
+    const v = validatePersonEmail({ ...good, body: `${good.body}\n${line}` });
+    assert.equal(v.gates.banned_phrases.pass, true, `rejected sanctioned copy: ${line} -> ${v.gates.banned_phrases.detail}`);
+  }
+});
+
+test("enterprise language is still caught when it is NOT negated", () => {
+  for (const line of ["We can begin procurement next quarter.", "Our vendor team will handle the rollout."]) {
+    const v = validatePersonEmail({ ...good, body: `${good.body}\n${line}` });
+    assert.equal(v.gates.banned_phrases.pass, false, `accepted: ${line}`);
+  }
+});
+
+test("a markdown-wrapped link fails the link gate, not the signature gate", () => {
+  const body = good.body.replace("Would you be open to a short call next week?",
+    "Visit [radiusai.online](https://www.radiusai.online/) to explore further.");
+  const c = { ...contract, product: { name: "RadiusAI", url: "https://www.radiusai.online/" } };
+  const v = validatePersonEmail({ ...good, body, contract: c });
+  assert.equal(v.gates.product_link_present.pass, false);
+  assert.match(v.gates.product_link_present.detail, /markdown/);
+  assert.equal(v.gates.signature_real.pass, true, "a markdown link is not an unfilled placeholder");
+});
+
+test("signature_real still catches real placeholders next to a bare link", () => {
+  const body = `${good.body}\nhttps://www.radiusai.online/\n[Your Position]`;
+  const v = validatePersonEmail({ ...good, body });
+  assert.equal(v.gates.signature_real.pass, false);
+});
+
+test("states_free fails when the free message is missing from the subject", () => {
+  const v = validatePersonEmail({ ...good, subject: "your new AI centre" });
+  assert.equal(v.gates.states_free.pass, false);
+  assert.match(v.gates.states_free.detail, /subject/);
+});
+
+test("states_free fails when the free message is missing from the body", () => {
+  const v = validatePersonEmail({ ...good, body: good.body.replace(/RadiusAI is free[^.]*\. /, "") });
+  assert.equal(v.gates.states_free.pass, false);
+  assert.match(v.gates.states_free.detail, /body/);
+});
+
+test("states_free accepts the alternative phrasings, not just the word 'free'", () => {
+  for (const phrasing of ["at no cost", "zero cost", "costs your university nothing"]) {
+    const v = validatePersonEmail({
+      ...good,
+      subject: `AI centre, ${phrasing}`,
+      body: good.body.replace("RadiusAI is free to your institution and free for every student.", `RadiusAI comes at ${phrasing}.`),
+    });
+    assert.equal(v.gates.states_free.pass, true, `rejected: ${phrasing}`);
+  }
+});
+
+test("superiority claims are rejected even though a real proof point now exists", () => {
+  for (const bad of ["We are the best at this.", "RadiusAI is proven.", "We guarantee placements.", "We are #1."]) {
+    const v = validatePersonEmail({ ...good, body: `${good.body}\n${bad}` });
+    assert.equal(v.gates.banned_phrases.pass, false, `accepted: ${bad}`);
+  }
+});
+
+test("the operational register is not rejected as informal", () => {
+  // The handoff explicitly sanctions these for operational-tone roles. They were
+  // never banned by name, but this pins it so a future banned-phrase sweep cannot
+  // quietly outlaw the voice the spec asks for.
+  const body = good.body.replace("Would you be open to a short call next week?",
+    "It costs you nothing, so there's no reason not to, and it has never been easier to get your students ready.");
+  const v = validatePersonEmail({ ...good, body });
+  assert.equal(v.gates.banned_phrases.pass, true, v.gates.banned_phrases.detail || "");
+});
+
+test("'pilot' is citable — the sanctioned proof point is one", () => {
+  const v = validatePersonEmail({ ...good, body: `${good.body}\nA pilot ran with the European School of Economics.` });
+  assert.equal(v.gates.banned_phrases.pass, true, v.gates.banned_phrases.detail || "");
 });
 
 test("signature_real rejects a bracketed placeholder — the clearest tell of an unread email", () => {
@@ -444,10 +526,33 @@ test("campaign: a Hinglish line without a gloss cannot be reviewed", () => {
   assert.equal(v.gates.has_meaning.pass, false);
 });
 
-test("campaign: proof claims become legal once proof_points actually exist", () => {
+test("campaign: evidence-shaped claims become legal once proof_points actually exist", () => {
   const withProof = { ...PRODUCT, proof_points: [{ name: "pilot", description: "measured uplift" }] };
-  const v = validateCampaign({ campaign: campaign({ big_idea: "Proven in a pilot." }), product: withProof, input: {} });
+  const v = validateCampaign({ campaign: campaign({ big_idea: "Trusted by a London business school." }), product: withProof, input: {} });
   assert.equal(v.gates.no_unbacked_claims.pass, true);
+});
+
+test("campaign: inflected banned words are caught (leveraging, not just leverage)", () => {
+  // A real campaign shipped "leveraging BIT Mesra's esteemed reputation": the
+  // banned list held the string "leverage", which is not a substring of
+  // "leveraging", so the substring match missed it entirely.
+  const v = validateCampaign({ campaign: campaign({ cta: "Leveraging your reputation, let us talk." }), product: PRODUCT, input: {} });
+  assert.equal(v.gates.banned_phrases.pass, false);
+});
+
+test("campaign: superiority claims stay banned even when proof_points exist", () => {
+  // A pilot with one school licenses "we ran a pilot". It does not license "#1",
+  // "best" or "proven" — so these must not become legal the day proof is added.
+  const withProof = { ...PRODUCT, proof_points: [{ name: "pilot", description: "measured uplift" }] };
+  for (const bad of ["Proven across India.", "The best placement tool.", "We are #1 for placements.", "We guarantee placements."]) {
+    const v = validateCampaign({ campaign: campaign({ big_idea: bad }), product: withProof, input: {} });
+    assert.equal(v.gates.no_unbacked_claims.pass, false, `accepted: ${bad}`);
+  }
+});
+
+test("campaign: 'pilot' is not enterprise vocabulary — the sanctioned proof point is one", () => {
+  const v = validateCampaign({ campaign: campaign({ big_idea: "A pilot ran at a London campus." }), product: PRODUCT, input: {} });
+  assert.equal(v.gates.b2c_framing.pass, true);
 });
 
 // ── the product + campaign reach the email contract ────────────────────────

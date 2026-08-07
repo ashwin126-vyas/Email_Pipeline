@@ -234,6 +234,15 @@ export function productBlock(row) {
     offers: (row.offers || []).map((c) => ({ name: c.name, description: c.description, best_for: c.best_for || null })),
     pricing: row.pricing || null,
     cta_selection_logic: extra.cta_selection_logic || null,
+    // The contract the campaign and email stages are REQUIRED to read from.
+    // Everything above is reference the model may draw on; must_state is what it
+    // may not leave out. Free is the spine (subject, opening, close) and
+    // headline_angles is a positioning library the campaign selects one or two
+    // from — carrying all of them is what produces a templated email.
+    must_state: extra.must_state || null,
+    // What we may assert and what punctures us. Kept next to proof_points on
+    // purpose: the model reads them together.
+    claims_discipline: extra.claims_discipline || null,
   };
 }
 

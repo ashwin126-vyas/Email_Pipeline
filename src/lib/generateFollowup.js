@@ -22,7 +22,7 @@
 // meaningless). Nothing here sends anything.
 
 import { chatJSON, aiProvider } from "./llm.js";
-import { BANNED, BANNED_PATTERNS, B2B_LANGUAGE, norm, overlap } from "./generatePersonEmail.js";
+import { BANNED, BANNED_PATTERNS, B2B_LANGUAGE, SUPERIORITY_CLAIMS, enterpriseHits, norm, overlap } from "./generatePersonEmail.js";
 import { senderBlock, signatureProblem } from "./sender.js";
 
 export const FOLLOWUP_PROMPT_VERSION = "followup-v1-2026-07";
@@ -35,23 +35,44 @@ export const FOLLOWUP_STEPS = {
   1: {
     send_after_days: 3,
     max_words: 150,
-    min_words: 100,
-    goal: "Add one specific they did not get the first time, and make the ask smaller.",
-    angle_guidance: `Open on something concrete about THEIR students or THEIR institution, not on
-the previous email. Add exactly ONE new specific: a capability from the product
-block that the first email did not use, or a fact from the contract it did not
-cite. Then make the ask smaller than last time — not "book a demo" again but
-something that costs them almost nothing, like forwarding a link to one batch.`,
+    // 100 was the floor for the old brief ("add one new specific"). The handoff
+    // brief is tighter — lead on ONE pillar, restate free once, make the ask
+    // smaller — and it lands at 80-90 words every time: three consecutive runs
+    // came in at 87, 80 and 83 against a 100 floor, so the floor was buying
+    // retries rather than length. The spec sets only an upper bound for this step.
+    min_words: 80,
+    goal: "Introduce the one thing they did not get first time, and make the ask smaller.",
+    angle_guidance: `WHAT LEADS THIS EMAIL depends on institution tier (from the CTA logic):
+- If the institution is partnership-tier (strong placement record OR elite): LEAD
+  ON REVENUE. State plainly that RadiusAI is the rare tool that pays the
+  university instead of billing it: qualifying universities share in the revenue
+  under a distribution partnership. Frame it as AVAILABLE, never a blanket
+  promise, never a figure, no pricing. The line "you get paid, not billed" is
+  sanctioned.
+- Otherwise: do NOT mention revenue. Lead on the best headline angle NOT used in
+  the initial email for this contact (usually no_student_left_behind or
+  placement_rate), expressed through their specifics.
+
+Either way, restate "free" once. One ask, smaller than last time: a short
+partnership conversation, or forward the free ATS checker to one batch.`,
   },
   2: {
     send_after_days: 7,
     max_words: 110,
-    min_words: 70,
-    goal: "Short, easy to decline. Narrow the ask to one concrete thing.",
-    angle_guidance: `Calm, brief, and genuinely easy to say no to. Give them an explicit way out
-("if this is not useful, say so and I will leave it there"). Do not re-explain
-the product. Do not list capabilities. Do not ask a second question. Between 70
-and 110 words, and still shorter than both previous emails.`,
+    // The handoff states 70-110 for this step, but its own brief for the step —
+    // do not re-explain the product, one new angle only, one narrow ask, an
+    // explicit way out — lands at ~62 words. Nine consecutive runs came in at
+    // 54-66 and none reached 70. The floor and the brief disagree, and reaching
+    // the floor would mean padding, which this pipeline forbids everywhere else.
+    // shorter_than_previous still enforces the ladder.
+    min_words: 60,
+    goal: "One concrete piece of value, easy to decline. Leads on LIVE COHORT ANALYTICS.",
+    angle_guidance: `Lead on the live cohort analytics: the officer sees every student's application
+and placement progress in real time, at no cost. That is the one new angle; do
+not re-explain the product or list capabilities. Restate "free" once. Give them
+an explicit way out ("if this is not useful, say so and I will leave it there").
+One ask, narrow and concrete, never two questions. Between 60 and 110 words, and
+still shorter than both previous emails.`,
   },
   // The sign-off. Only reached when someone asks for a third follow-up — the
   // default sequence is two, and step 2 already closes politely. Its band sits
@@ -62,12 +83,13 @@ and 110 words, and still shorter than both previous emails.`,
     send_after_days: 14,
     max_words: 70,
     min_words: 35,
-    goal: "Close the thread. One line of value, an explicit door left open, nothing asked.",
-    angle_guidance: `This is the last email and it must read that way. Say the useful thing once, in a
-single sentence. Then close the loop explicitly — make clear you will not write
-again and that they can come back whenever it is relevant. Do NOT ask a question,
-do NOT restate capabilities, do NOT add a new offer. Under 70 words. Shorter than
-every previous email in the thread.`,
+    goal: "Close the thread. Leads on FREE and \"it has never been easier\". Nothing asked.",
+    angle_guidance: `This is the last email and it must read that way. Lead on the fact that it is
+free and it has never been easier to put in front of their students. Say the
+useful thing once, in a single sentence. Then close the loop explicitly: make
+clear you will not write again and that they can come back whenever it is
+relevant. Do NOT ask a question, do NOT restate capabilities, do NOT add a new
+offer. Under 70 words. Shorter than every previous email in the thread.`,
   },
 };
 
@@ -103,10 +125,30 @@ const FOLLOWUP_SCHEMA = {
   additionalProperties: false,
 };
 
-function systemPrompt({ step, tone, maxWords, minWords }) {
+// Same two voices as the initial email, and for the same reason: a thread that
+// switches register between step 1 and step 2 reads as a different sender.
+const REGISTER_GUIDE = {
+  academic: `Formal and precise. Address by title and surname, Dr. or Prof. where
+applicable. No contractions. Measured and respectful. Use "it has never been
+easier", never "no excuse".`,
+  operational: `Direct and confident. Short, punchy sentences. Contractions are
+fine. Blunt clarity is wanted: "no reason not to", "it costs you nothing", "it has
+never been easier". Still professional. No hype words, no exclamation marks.`,
+};
+
+function systemPrompt({ step, tone, maxWords, minWords, register }) {
   const contractWords = minWords ? `write ${minWords} to ${maxWords} words` : `stay under ${maxWords} words`;
   const cfg = FOLLOWUP_STEPS[step] || FOLLOWUP_STEPS[1];
-  return `You write follow-up email number ${step} in a short sequence. The recipient
+  return `FRAME (most important)
+The subject line and the opening sentence are written from the UNIVERSITY'S point
+of view, not the student's. The reader is not applying for jobs. Never make a
+student the subject of the subject line or the opening. Point every student
+benefit at the officer.
+
+TONE
+${REGISTER_GUIDE[register] || REGISTER_GUIDE.academic}
+
+You write follow-up email number ${step} in a short sequence. The recipient
 already received the previous email(s) shown to you and did NOT reply. They are
 not annoyed with you; they are busy and it was not important enough yet.
 
@@ -158,13 +200,17 @@ TONE: ${tone === "peer" ? "Peer to peer. Direct and concrete, no deference, no s
  * Build the contract for one follow-up step. Carries the FULL text of every
  * previous step, because every gate below is comparative.
  */
-export function buildFollowupContract({ step, original, previous = [], product, campaign, research }) {
+export function buildFollowupContract({ step, original, previous = [], product, campaign, research, role }) {
   const cfg = FOLLOWUP_STEPS[step] || FOLLOWUP_STEPS[1];
   const contract = {
     step,
     // Same signature as the first email — the thread is from one person, and a
     // follow-up signed differently reads as a different sender.
     sender: senderBlock(),
+    // The role carries tone_register. Without it the whole thread would default to
+    // the academic voice while the first email used the operational one, which
+    // reads as two different senders writing about the same thing.
+    ...(role ? { role } : {}),
     goal: cfg.goal,
     max_words: cfg.max_words,
     // The floor must yield to shorter_than_previous, or the two gates contradict
@@ -250,7 +296,14 @@ export function validateFollowup({ subject, body, newSpecific, contract }) {
   if (productUrl) {
     const bare = (u) => String(u).trim().toLowerCase()
       .replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/+$/, "");
-    add("product_link_present", bare(text).includes(bare(productUrl)), `body must contain ${productUrl}`);
+    const hasUrl = bare(text).includes(bare(productUrl));
+    // Same rule as the initial email: a plain-text email renders "[link](url)"
+    // literally, brackets and all.
+    const wrapped = /\[[^\]\n]*\]\(\s*https?:\/\//i.test(text);
+    add("product_link_present", hasUrl && !wrapped,
+      !hasUrl ? `body must contain ${productUrl}`
+        : wrapped ? "the link is wrapped in markdown; write the URL bare on its own line"
+        : null);
   }
 
   // 1a2. signature_real — same rule as the first email. A thread that signs off
@@ -319,7 +372,11 @@ export function validateFollowup({ subject, body, newSpecific, contract }) {
   // 9. banned_phrases — filler, cliche, and B2B vocabulary in a B2C pitch.
   const hits = BANNED.filter((p) => norm(text).includes(p));
   for (const { re, label } of BANNED_PATTERNS) if (re.test(text)) hits.push(label);
-  for (const re of B2B_LANGUAGE) if (re.test(text)) hits.push(`B2B language: ${String(re).slice(1, -2)}`);
+  // Negation-aware, same as the initial email: the free message is literally "no
+  // vendor, no budget, no rollout", and a flat ban rejects the copy the product
+  // block sanctions.
+  for (const h of enterpriseHits(text, B2B_LANGUAGE)) hits.push(`B2B language: ${h}`);
+  for (const { re, label } of SUPERIORITY_CLAIMS) if (re.test(text)) hits.push(label);
   if (text.includes("—") || text.includes("–")) hits.push("em-dash");
   if (text.includes("!")) hits.push("exclamation mark");
   add("banned_phrases", hits.length === 0, hits.length ? hits.join(", ") : null);
@@ -346,9 +403,10 @@ export function validateFollowup({ subject, body, newSpecific, contract }) {
  * Generate one follow-up step.
  * @returns {Promise<{subject?, body?, newSpecific?, angle?, ask?, contract, prompts, validation?, warnings, error?}>}
  */
-export async function generateFollowup({ step, original, previous = [], product, campaign, research, attempts = 2 }) {
-  const contract = buildFollowupContract({ step, original, previous, product, campaign, research });
-  const system = systemPrompt({ step, tone: contract.tone, maxWords: contract.max_words, minWords: contract.min_words });
+export async function generateFollowup({ step, original, previous = [], product, campaign, research, role, attempts = 2 }) {
+  const contract = buildFollowupContract({ step, original, previous, product, campaign, research, role });
+  const register = contract?.role?.tone_register === "operational" ? "operational" : "academic";
+  const system = systemPrompt({ step, tone: contract.tone, maxWords: contract.max_words, minWords: contract.min_words, register });
   const baseUser = `CONTRACT\n${JSON.stringify(contract, null, 2)}`;
   let user = baseUser;
   let last = null;

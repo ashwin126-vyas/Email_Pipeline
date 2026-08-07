@@ -28,7 +28,8 @@
     "facts:add": "node --env-file=.env scripts/add-verified-fact.mjs",
     "roles:research": "node --env-file=.env scripts/research-role-objectives.mjs",
     "campaigns:refresh": "node --env-file=.env scripts/refresh-campaigns.mjs",
-    "cost:report": "node scripts/token-cost-report.mjs"
+    "cost:report": "node scripts/token-cost-report.mjs",
+    "roles:tone": "node --env-file=.env scripts/migrate-role-tone.mjs"
   },
   "dependencies": {
     "imapflow": "^1.4.7",

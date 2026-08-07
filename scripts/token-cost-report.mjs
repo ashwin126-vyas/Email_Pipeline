@@ -135,8 +135,8 @@ const html = `<meta charset="utf-8"><title>RadiusAI — Token Consumption &amp; 
  td.n{font-variant-numeric:tabular-nums;white-space:nowrap}
  tr.tot td{background:#f7f9fc;font-weight:700;border-top:1.5px solid #c9d1dc}
  .hero{display:flex;gap:12px;margin:12px 0}
- .main{flex:1.2;border-radius:9px;padding:15px 19px;background:#16181d;color:#fff}
- .main .big{font-size:34pt;font-weight:700;letter-spacing:-1.6px;margin:2px 0}
+ .main{flex:1;border-radius:9px;padding:14px 16px;background:#16181d;color:#fff;min-width:0}
+ .main .big{font-size:26pt;font-weight:700;letter-spacing:-1.6px;margin:2px 0}
  .main .lbl{font-size:9pt;text-transform:uppercase;letter-spacing:.9px;opacity:.72}
  .main .sm{font-size:9pt;opacity:.85}
  .box{flex:1;border:1px solid #d8dde5;border-radius:9px;padding:15px 17px;background:#fbfcfe}
@@ -162,10 +162,16 @@ campaign, then their email and three follow-ups.<br>Mean of ${THREE ? THREE.user
 users, every rejected attempt included.</div>
   </div>
   <div class="main" style="background:#1f3a5f">
-    <div class="lbl">${THREE ? THREE.users.length : 3} users at ${THREE ? THREE.users.length : 3} different universities</div>
+    <div class="lbl">3 users at 3 <u>different</u> universities</div>
     <div class="big">${THREE ? r2(THREE.total_inr) : "—"}</div>
-    <div class="sm">${THREE ? THREE.users.map((u) => r2(u.inr)).join(" + ") : ""}<br>
-Each pays for its own organisation — nothing is shared between them.</div>
+    <div class="sm">${THREE ? `${r2(THREE.avg_inr)} each · ${THREE.users.map((u) => r2(u.inr)).join(" + ")}` : ""}<br>
+Each pays for its own organisation — nothing is shared.</div>
+  </div>
+  <div class="main" style="background:#14532d">
+    <div class="lbl">3 users at <u>one</u> university</div>
+    <div class="big">${SAME ? r2(SAME.total_inr) : "—"}</div>
+    <div class="sm">${SAME ? `${r2(SAME.avg_inr)} each · ${SAME.users.map((u) => r2(u.inr)).join(" + ")}` : ""}<br>
+${SAME && THREE ? `${r2(THREE.total_inr - SAME.total_inr)} cheaper (${Math.round((1 - SAME.total_inr / THREE.total_inr) * 100)}%) — research and campaign paid once.` : ""}</div>
   </div>
 </div>
 
@@ -220,12 +226,12 @@ ${THREE ? `
 <table>
 <tr><th>User</th><th>University</th><th>Coverage</th><th>Emails</th><th>Rejected attempts</th><th>Cost</th></tr>
 ${THREE.users.map((u) => `<tr><td>${esc(u.name)}</td><td>${esc(u.org)}</td>
-  <td class="n">${esc(u.coverage)}</td><td class="n">${u.steps.length}</td>
-  <td class="n">${u.attempts - u.steps.length}</td>
+  <td class="n">${esc(u.coverage)}</td><td class="n">${u.emails}</td>
+  <td class="n">${u.attempts - u.emails}</td>
   <td class="n"><b>${r2(u.inr)}</b></td></tr>`).join("")}
 <tr class="tot"><td colspan="3">Total — ${THREE.users.length} users, ${THREE.users.length} universities</td>
-  <td class="n">${THREE.users.reduce((n, u) => n + u.steps.length, 0)}</td>
-  <td class="n">${THREE.users.reduce((n, u) => n + u.attempts - u.steps.length, 0)}</td>
+  <td class="n">${THREE.users.reduce((n, u) => n + u.emails, 0)}</td>
+  <td class="n">${THREE.users.reduce((n, u) => n + u.attempts - u.emails, 0)}</td>
   <td class="n">${r2(THREE.total_inr)}</td></tr>
 <tr class="tot"><td colspan="5">Average per user</td><td class="n">${r2(THREE.avg_inr)}</td></tr>
 </table>
@@ -250,14 +256,14 @@ ${SAME.users.map((u, i) => `<tr><td>${esc(u.name)}<br><span class="dim">contact 
 
 <h2>Same university vs different universities</h2>
 <table>
-<tr><th>Three users…</th><th>Search calls</th><th>Total</th><th>Per user</th></tr>
-<tr><td>at <b>three different</b> universities<br><span class="dim">three research runs, three campaigns</span></td>
-  <td class="n">${THREE ? THREE.users.reduce((n, u) => n + u.steps.reduce((m, x) => m + (x.search_calls || 0), 0), 0) : "—"}</td>
+<tr><th>Three users…</th><th>Research runs</th><th>Campaigns</th><th>Total</th><th>Per user</th></tr>
+<tr><td>at <b>three different</b> universities</td>
+  <td class="n">3</td><td class="n">3</td>
   <td class="n">${THREE ? r2(THREE.total_inr) : "—"}</td><td class="n">${THREE ? r2(THREE.avg_inr) : "—"}</td></tr>
-<tr><td>at <b>one</b> university<br><span class="dim">one research run, one campaign, shared</span></td>
-  <td class="n">${SAME.users.reduce((n, u) => n + u.search_calls, 0)}</td>
+<tr><td>at <b>one</b> university</td>
+  <td class="n">1</td><td class="n">1</td>
   <td class="n">${r2(SAME.total_inr)}</td><td class="n">${r2(SAME.avg_inr)}</td></tr>
-<tr class="tot"><td>Saved by sharing one organisation</td><td class="n">—</td>
+<tr class="tot"><td>Saved by sharing one organisation</td><td class="n"></td><td class="n"></td>
   <td class="n">${THREE ? r2(THREE.total_inr - SAME.total_inr) : "—"}</td>
   <td class="n">${THREE ? `${Math.round((1 - SAME.total_inr / THREE.total_inr) * 100)}%` : "—"}</td></tr>
 </table>
@@ -350,31 +356,22 @@ ${THREE ? `
 Every attempt is counted, including the ones the gates rejected — a rejected draft is billed exactly
 like a good one, and pretending otherwise would understate the real number.</p>
 <table>
-<tr><th>Contact / organisation</th><th>Coverage</th><th>LLM calls</th><th>Attempts</th><th>Rejected</th><th>Cost</th></tr>
+<tr><th>Contact / organisation</th><th>Coverage</th><th>Emails</th><th>Attempts</th><th>Rejected</th><th>Cost</th></tr>
 ${THREE.users.map((u) => `<tr><td>${esc(u.name)}<br><span class="dim">${esc(u.org)}</span></td>
   <td class="n">${esc(u.coverage)}</td>
-  <td class="n">${u.steps.reduce((n, x) => n + x.calls, 0)}</td>
+  <td class="n">${u.emails}</td>
   <td class="n">${u.attempts}</td>
-  <td class="n">${u.attempts - u.steps.length}</td>
+  <td class="n">${u.attempts - u.emails}</td>
   <td class="n"><b>${r2(u.inr)}</b></td></tr>`).join("")}
 <tr class="tot"><td>Three contacts</td><td class="n"></td>
-  <td class="n">${THREE.users.reduce((n, u) => n + u.steps.reduce((m, x) => m + x.calls, 0), 0)}</td>
+  <td class="n">${THREE.users.reduce((n, u) => n + u.emails, 0)}</td>
   <td class="n">${THREE.users.reduce((n, u) => n + u.attempts, 0)}</td>
-  <td class="n">${THREE.users.reduce((n, u) => n + u.attempts - u.steps.length, 0)}</td>
+  <td class="n">${THREE.users.reduce((n, u) => n + u.attempts - u.emails, 0)}</td>
   <td class="n">${r2(THREE.total_inr)}</td></tr>
 </table>
 <p>Average <b>${r2(THREE.avg_inr)}</b> per contact including their organisation's one-time research and
 campaign. The spread across the three is the story: it tracks how many attempts the gates rejected,
 not how much was written.</p>
-<table>
-<tr><th>Step</th>${THREE.users.map((u) => `<th>${esc(String(u.org).split(" ").slice(0, 2).join(" "))}</th>`).join("")}</tr>
-${["email", "followup-1", "followup-2", "followup-3"].map((lbl) => `<tr>
-  <td>${lbl === "email" ? "Research + campaign + email" : `Follow-up ${lbl.slice(-1)}`}</td>
-  ${THREE.users.map((u) => {
-    const st = u.steps.find((x) => x.label === lbl);
-    return `<td class="n">${st ? `${r2(st.inr)}<br><span class="dim">${st.words}w · ${st.attempts} att</span>` : "—"}</td>`;
-  }).join("")}</tr>`).join("")}
-</table>
 ` : ""}
 <h2>What the tokens cost</h2>
 <table>
@@ -459,6 +456,13 @@ number is lower. Unit figures in the tables above do split it correctly.</div>
 </ul>
 
 <h2>Method</h2>
+<div class="note"><b>Provenance of this edition.</b> The per-call ledger files behind the unit tables
+were cleared from disk before this rebuild, so the figures here were restored from the instrumented
+runs' recorded output rather than re-measured. Every number is a measurement that was taken; none was
+re-derived from prompt length. One table did not survive — the per-step breakdown of the
+three-different-universities test — and has been dropped rather than reconstructed. The underlying
+<code>email_testing</code> rows are all still in the database, so any of it can be re-measured by
+re-running those contacts.</div>
 <p>Token counts come from the <code>usage</code> block OpenAI returns on every call, recorded by
 <code>tokenLedger</code> in <code>src/lib/llm.js</code> before anything can throw, and by
 <code>searchTokenLedger</code> in <code>src/lib/search.js</code> for search. Costs apply list prices

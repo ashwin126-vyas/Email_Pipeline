@@ -83,10 +83,49 @@ export const BANNED_PATTERNS = [
 // radiusai.online's own CTA is "Partner With Us".
 export const B2B_LANGUAGE = [
   /\blicen[cs]e[sd]?\b/i, /\bprocurement\b/i, /\broll[- ]?out\b/i,
-  /\bdeploy(ment|ing|ed)?\b/i, /\bpilot\b/i, /\bROI\b/, /\breturn on investment\b/i,
+  // "pilot" was banned here as procurement vocabulary. It has to come out: the
+  // one sanctioned proof point is the European School of Economics PILOT, so the
+  // ban would reject the only evidence the email is allowed to cite.
+  /\bdeploy(ment|ing|ed)?\b/i, /\bROI\b/, /\breturn on investment\b/i,
   /\benterprise\b/i, /\bvendor\b/i, /\bSLA\b/, /\bprocure\b/i,
   /\bsolution for your (institution|university|college)\b/i,
   /\binstitutional efficiency\b/i, /\bcost[- ]effective for your\b/i,
+];
+
+// Enterprise vocabulary is banned so we do not PITCH procurement — but the whole
+// free message is "there is none of that", and the product block's own sanctioned
+// lines say "with no procurement to navigate" and "No vendor, no budget, no
+// rollout". A flat word ban rejects the copy we told the model to use. So a hit is
+// only a hit when it is not negated.
+const NEGATED_BEFORE = /\b(no|not|without|zero|never|free from|free of)\b(\s+\S+){0,2}\s*$/i;
+
+export function enterpriseHits(text, patterns) {
+  const hits = [];
+  for (const re of patterns) {
+    const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+    for (const m of String(text).matchAll(g)) {
+      const before = String(text).slice(Math.max(0, m.index - 40), m.index);
+      if (NEGATED_BEFORE.test(before)) continue;   // "no procurement", "without a vendor"
+      hits.push(String(re).slice(1, -2));
+      break;
+    }
+  }
+  return hits;
+}
+
+// Superiority and unprovable claims. Separate from BANNED because these are not a
+// style problem: they are assertions we cannot back, and a pilot at one school
+// licenses none of them. Always checked, proof or no proof.
+export const SUPERIORITY_CLAIMS = [
+  { re: /\bonly (company|platform|tool|product)\b/i, label: "superiority (only company)" },
+  { re: /#\s?1\b/, label: "superiority (#1)" },
+  { re: /\bnumber one\b/i, label: "superiority (number one)" },
+  { re: /\bbest[- ]in[- ]class\b/i, label: "superiority (best-in-class)" },
+  { re: /\bthe best\b/i, label: "superiority (the best)" },
+  { re: /\bproven\b/i, label: "unprovable (proven)" },
+  { re: /\bguarantee(s|d|ing)?\b/i, label: "unprovable (guarantee)" },
+  { re: /\bwe improve your placements\b/i, label: "unprovable (we improve your placements)" },
+  { re: /\bindustry[- ]leading\b/i, label: "superiority (industry-leading)" },
 ];
 
 // Things a STUDENT owns. The recipient is a placement officer, so "your CV" or
@@ -129,107 +168,122 @@ const EMAIL_SCHEMA = {
   additionalProperties: false,
 };
 
-const TONE_GUIDE = {
-  formal: "Formal and precise. Title and surname. No contractions, no slang.",
-  peer: "Peer to peer. Direct, concrete, no deference and no salesmanship.",
-  warm: "Warm and plain. Friendly without being familiar. Still specific.",
+// TONE_GUIDE used to live here. Voice is now chosen by role.tone_register
+// (REGISTER_GUIDE below) rather than by the research-derived `tone` field, because
+// the register that suits a reader is a fact about their job, not about how their
+// institution writes. `tone` is still carried on the contract for the record.
+
+// The two voices. Which one runs is a property of the ROLE (role.tone_register),
+// not of the institution: a faculty member holding the placement brief and a
+// placement manager at the same college are not addressed the same way.
+const REGISTER_GUIDE = {
+  academic: `Formal and precise. Address by title and surname, Dr. or Prof. where
+applicable. No contractions. Measured and respectful. State the free and analytics
+facts plainly. Use "it has never been easier", never "no excuse".`,
+  operational: `Direct and confident. Short, punchy sentences. Contractions are
+fine. Blunt clarity is wanted: "no reason not to", "it costs you nothing", "it has
+never been easier", and you may use "no excuse for any of your students to go in
+with a weak CV". Still professional. No hype words, no exclamation marks.`,
 };
 
-function systemPrompt({ mode, tone, maxWords, minWords, thin }) {
-  const shared = `RULES
-1. LENGTH: write ${minWords} to ${maxWords} words in the body, and count them. Aim for
-   the middle of the range. Under ${minWords} is a failure — a placement officer who
-   reads four sentences has learned nothing they can act on. Do not pad to reach
-   it: earn the length with specifics, never with restatement.
-2. Cite ONLY facts listed in allowed_facts. You may not introduce any number,
-   percentage, ranking, date, employer, award or shared history that is not there.
-   If you want a detail and do not have it, write the sentence without it.
+function systemPrompt({ mode, tone, maxWords, minWords, thin, register }) {
+  const frame = `FRAME (most important)
+The subject line and the opening sentence are written from the UNIVERSITY'S point
+of view, not the student's. The reader is not applying for jobs. Never make a
+student the subject of the subject line or the opening. Point every student
+benefit at the officer.
+
+MUST STATE (from product.must_state)
+- FREE is mandatory and appears in the SUBJECT, the OPENING, and the CLOSING. It
+  is the spine of the email. Use the register-appropriate line from spine_free.
+- OPENING FUSION: the opening sentence still leads on the institution's strongest
+  specific hook (from top_hooks), and the free fact lands in the same breath or
+  the very next sentence. Do NOT open every email with an identical generic line
+  about being free; open on THEM, then hit free immediately. For thin-coverage
+  schools with no strong hook, leading on free is fine.
+- BODY: lead the body on the campaign's chosen_angles (one, at most two). Express
+  the angle through this institution's own facts, using its headline as the force
+  and its substance as the provable backing. Do not list every angle; carry only
+  the chosen one(s).
+- Do NOT state revenue in the initial email; that is a follow-up pillar.
+
+CLAIMS DISCIPLINE
+Provable only. Say "professional, ATS-ready applications", "placement-ready",
+"free", "live cohort visibility", or cite the European School of Economics pilot
+if there is room. NEVER "only company", "#1", "best", "proven", "we improve your
+placements", "guarantee", or any number not in allowed_facts. "Free" needs no
+proof; lean on it.
+
+TONE
+${REGISTER_GUIDE[register] || REGISTER_GUIDE.academic}`;
+
+  const shared = `${frame}
+
+RULES
+1. LENGTH: ${minWords} to ${maxWords} words in the body, and count them. Earn the
+   length with specifics, never restatement.
+2. Cite ONLY facts in allowed_facts. Introduce no number, ranking, date, employer,
+   award or shared history that is not there.
 3. Use at most the hooks in top_hooks, verbatim in meaning. Never invent a hook.
-2b. Facts flagged verified_by_human were supplied deliberately by the sender
-   because they want them used. Prefer them over the crawled facts when both
-   would fit, and cite at least one when the email has room. They are not
-   optional colour: someone put them there on purpose.
-4. No filler openers and no announcing yourself. Banned outright: "I hope this
-   email finds you well", "I am reaching out", "I wanted to reach out", "allow me
-   to introduce". Say the thing instead of saying you are about to say it.
-5. No generic praise. "Commitment to excellence", "dedication to excellence" and
-   "your impressive achievements" say nothing a mail merge could not say. If you
-   are complimenting them, name the specific fact you are complimenting.
-6. One clear ask, at the end. Never two questions.
-7. No em-dashes. No exclamation marks. No corporate cliche.
-8. Subject: max 8 words, specific, no colons, no "Re:". If "avoid_subjects" is
-   present, yours must be clearly different from every one of them — other people
-   at this same institution already received those. Take a different angle from
-   campaign.subject_angles.
-8a. The subject must NOT contain the recipient's name. "Smrita Dwivedi manages
-   placements for 450 companies" reads as a line lifted from a scraped database,
-   because that is exactly what it looks like. Write about the topic, not the
-   person.
-8b. The subject addresses the RECIPIENT, who is a placement officer, NOT a student.
-   Never write "your CV", "your career", "your job hunt", "your applications" or
-   "your future" to them — they are not the one applying for jobs. Say "your
-   students" when you mean students.
-9. hooks_used must copy the top_hooks entries you actually referenced, and
-   facts_cited must copy the allowed_facts entries you actually referenced. Both
-   are checked against your body by code. Listing something you did not use, or
-   using something you did not list, fails validation.
-9b. LINK. When product.url is present, include that URL exactly once, verbatim, on
-   its own line beside the ask. It is how the reader reaches the product — an email
-   that describes a tool without saying where to find it makes the reader go and
-   search for it, and most will not. Do not shorten it, wrap it in markdown, or add
-   a tracking parameter: write it exactly as the contract gives it.
-9c. SIGN OFF with exactly the two lines in sender.sign_off_exactly — the sender's
-   name then their title, after your closing line ("Kind regards," or similar).
-   NEVER write a bracketed placeholder such as [Your Name], [Your Position] or
-   [Your Contact Information]. You know who is writing; it is in the contract.
-
-10. When a "product" block is present, describe it using ONLY the capabilities it
-   lists. Read "proof_available": if it says NONE, you have no statistics, no
-   customers and no testimonials, and inventing one is the worst failure available
-   to you. Make the ask on the strength of the offer instead.
-10b. The product is a CONSUMER (B2C) product used by STUDENTS. The recipient is
-   not the buyer and not the user — they are a route to their students. Write
-   about what a student gets: their CV, their applications, their first job.
-   Never pitch institutional efficiency, placement-cell workload, reporting or
-   "outcomes for your institution", and never use procurement language (licence,
-   rollout, pilot, deployment, ROI, solution for your institution).
-11. When a "campaign" block is present, the email must carry its idea
-   (campaign.theme, campaign.pain_framing) and take its ask from campaign.cta.
-   Everyone at this institution receives this campaign, so the IDEA is fixed and
-   the words are yours. Do not paste campaign_line into the body as a slogan; an
-   email is not a billboard. Draw on campaign.talking_points only.
-
-TONE: ${TONE_GUIDE[tone] || TONE_GUIDE.formal}`;
+   Facts flagged verified_by_human were supplied on purpose; prefer them and cite
+   at least one when there is room.
+4. No filler openers, no announcing yourself. Banned: "I hope this email finds you
+   well", "I am reaching out", "I wanted to reach out", "allow me to introduce".
+   The opening leads on the institution's hook fused with the FREE fact instead.
+5. No generic praise. "Commitment to excellence" and "impressive achievements" say
+   nothing. If you compliment them, name the specific fact.
+6. One clear ask, at the end, taken from campaign.cta. Never two questions.
+7. No em-dashes. No corporate cliche. No exclamation marks.
+8. SUBJECT: max 8 words, specific, no colon, no "Re:". It leads on the
+   university's win, ideally the free/zero-cost fact, from the university's point
+   of view. It must NOT contain the recipient's name and must NOT address them as
+   the applicant ("your CV", "your job hunt"). If avoid_subjects is present, be
+   clearly different from all of them.
+9. hooks_used must copy the top_hooks you referenced; facts_cited must copy the
+   allowed_facts you referenced. Both are checked against your body.
+10. LINK: include product.url exactly once, verbatim, on its own line beside the
+   ask. Do not shorten, wrap or add parameters.
+11. SIGN OFF with exactly the two lines in sender.sign_off_exactly, name then
+   title. NEVER a bracketed placeholder.
+12. Describe the product using ONLY the capabilities and must_state it lists. If
+   proof_available is NONE, invent nothing.
+13. STILL BANNED even though you are writing to the institution: procurement and
+   enterprise language (licence, rollout, deployment, ROI, vendor, "solution for
+   your institution", SLA). You are not selling the officer a paid product; they
+   get the analytics and the outcome free because their students use it. Say the
+   concrete free benefit, never enterprise waffle.
+14. Carry campaign.theme and campaign.pain_framing. Draw on
+   campaign.talking_points. Do not paste campaign_line into the body.`;
 
   if (thin) {
-    return `You write one short cold email. Research on this recipient came back THIN:
+    return `You write one short cold outreach email TO the person in recipient. They are a
+PLACEMENT OFFICER at a university. Research on this institution came back THIN:
 there are few or no verified specifics about them.
 
-Write an honest, short, GENERIC email. Do not fake familiarity. Do not imply you
-have read their work, followed their career, or share a connection. State the
-purpose plainly and make one clear ask. A visibly generic email that is honest
-outperforms a fake-personal one that is caught.
+Write an honest, short email. Do not fake familiarity and do not imply you have
+read their work or share a connection. With no strong hook to open on, lead on the
+FREE fact: it costs the university nothing and every student starts free. That is
+true of every institution, so it is not fake personalisation, and it is the one
+thing worth saying when you know little else.
 
 ${shared}`;
   }
 
   if (mode === "on_behalf") {
-    return `You write one email SENT BY the person described in sender, TO the person
-described in recipient. You are writing in the sender's voice, first person. The
-sender is asking the recipient for something; the recipient does not know them.
+    return `You write one email SENT BY the person described in sender, TO the person in
+recipient, who is a PLACEMENT OFFICER at a university. You write in the sender's
+voice, first person.
 
-Open on common ground or the trigger event, not on the sender's credentials.
-Establish in one line who the sender is and why they are writing to THIS person
-specifically rather than to anyone in the field.
+Open on the institution's strongest hook, not on the sender's credentials.
+Establish in one line who the sender is and why they are writing to THIS
+institution rather than any other.
 
 ${shared}`;
   }
 
-  return `You write one cold outreach email TO the person described in recipient.
-
-Open on the trigger_event when there is one, otherwise on the strongest hook. The
-first sentence must be about THEM, not about you. The greeting line does not count
-as the opening.
+  return `You write one cold outreach email TO the person in recipient. They are a PLACEMENT
+OFFICER at a university. They are the reader and the decision-maker, and they act
+on what THEY get.
 
 ${shared}`;
 }
@@ -365,7 +419,14 @@ export function validatePersonEmail({ subject, body, hooksUsed = [], factsCited 
   if (productUrl) {
     const bare = (u) => String(u).trim().toLowerCase()
       .replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/+$/, "");
-    add("product_link_present", bare(text).includes(bare(productUrl)), `body must contain ${productUrl}`);
+    const hasUrl = bare(text).includes(bare(productUrl));
+    // A plain-text email renders "[label](url)" literally, brackets and all. The
+    // URL being present is not enough; it has to be bare.
+    const wrapped = /\[[^\]\n]*\]\(\s*https?:\/\//i.test(text);
+    add("product_link_present", hasUrl && !wrapped,
+      !hasUrl ? `body must contain ${productUrl}`
+        : wrapped ? "the link is wrapped in markdown; write the URL bare on its own line"
+        : null);
   }
 
   // 0b2. signature_real — a bracketed placeholder proves the email was generated
@@ -430,10 +491,26 @@ export function validatePersonEmail({ subject, body, hooksUsed = [], factsCited 
   // 3. banned_phrases — the filler openers the spec names, plus em-dashes, plus
   //    enterprise vocabulary (the product is B2C; students are the customer).
   const hits = BANNED.filter((p) => norm(text).includes(p));
-  for (const re of B2B_LANGUAGE) if (re.test(text)) hits.push(`B2B language: ${String(re).slice(1, -2)}`);
+  for (const h of enterpriseHits(text, B2B_LANGUAGE)) hits.push(`B2B language: ${h}`);
   for (const { re, label } of BANNED_PATTERNS) if (re.test(text)) hits.push(label);
+  for (const { re, label } of SUPERIORITY_CLAIMS) if (re.test(text)) hits.push(label);
   if (text.includes("—") || text.includes("–")) hits.push("em-dash");
   add("banned_phrases", hits.length === 0, hits.length ? hits.join(", ") : null);
+
+  // 3b. states_free — FREE is the whole thesis, and it kept slipping out of
+  //     emails that were otherwise fine. It must appear in the SUBJECT and the
+  //     BODY, not just somewhere in the text, because a body-only mention loses
+  //     the one thing that makes the email worth opening. Deliberately keyword
+  //     based rather than semantic: this gate is here to catch omission, not to
+  //     grade phrasing. Not applied to follow-ups — validateFollowup is separate.
+  const saysFree = (t) => /\bfree\b|\bno cost\b|\bat no cost\b|\bzero cost\b|\bcosts? (you|your university|the university) nothing\b/i.test(String(t || ""));
+  const freeInSubject = saysFree(subject);
+  const freeInBody = saysFree(body);
+  add("states_free", freeInSubject && freeInBody,
+    freeInSubject && freeInBody ? null
+      : !freeInSubject && !freeInBody ? "the free/zero-cost message is missing from both subject and body"
+      : !freeInSubject ? "subject does not state that it is free"
+      : "body does not state that it is free");
 
   // 4. hooks_within_top3 — a hook the model made up is the failure mode this
   //    whole API exists to prevent, so an unrecognised hook is a hard fail.
@@ -558,7 +635,9 @@ export async function generatePersonEmail({
     warnings.push("no search provider configured, research used only the supplied URLs");
   }
 
-  const system = systemPrompt({ mode, tone, maxWords, minWords, thin });
+  // Voice comes from the role, defaulting to the lower-risk formal one.
+  const register = contract?.role?.tone_register === "operational" ? "operational" : "academic";
+  const system = systemPrompt({ mode, tone, maxWords, minWords, thin, register });
   const basePrompt = `INPUT\n${JSON.stringify(contract, null, 2)}`;
   let userPrompt = basePrompt;
   let last = null;
